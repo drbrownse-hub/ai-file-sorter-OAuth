@@ -15,6 +15,64 @@ This document provides a detailed description of every test case in the project.
 - If Windows CMake reports a missing Visual Studio instance from an existing `build-tests` directory, use `cmake --fresh` when supported, delete/recreate that build directory, or choose a new build directory; the Visual Studio path is stored in `CMakeCache.txt`.
 - MediaInfo is expected from a package manager (`apt`/`dnf`/`pacman`/`brew`/`vcpkg`); vendored MediaInfo directories/binaries are intentionally rejected by the build.
 
+### ChatGPT/Codex feature verification
+
+These commands build the deterministic Codex protocol/app-server tests. They
+use the checked-in fake app-server, so they do not need a ChatGPT account,
+OAuth credentials, or network access. Do not enable the live-LLM tests for this
+coverage.
+
+Linux/macOS generic form:
+
+```bash
+cmake -S app -B build-tests -DAI_FILE_SORTER_BUILD_TESTS=ON
+cmake --build build-tests --target ai_file_sorter_tests aifs_fake_codex_app_server
+ctest --test-dir build-tests -R ai_file_sorter_tests --output-on-failure
+```
+
+Final full-suite form:
+
+```bash
+cmake --build build-tests --target ai_file_sorter_tests aifs_fake_codex_app_server
+ctest --test-dir build-tests --output-on-failure
+```
+
+The repository's existing Qt/vcpkg and MediaInfo prerequisites above remain
+required on Windows. The new unit coverage is organized across
+`test_chatgpt_settings.cpp`, `test_codex_protocol.cpp`,
+`test_codex_app_server.cpp`, `test_codex_runtime_service.cpp`,
+`test_codex_client.cpp`, `test_codex_image_analyzer.cpp`,
+`test_chatgpt_analysis_routing.cpp`,
+`test_llm_selection_visual_backend_model.cpp`, and
+`test_llm_selection_dialog_chatgpt.cpp`. It covers settings persistence
+without OAuth tokens, protocol serialization, fake-server behavior, model
+capability checks, text/visual routing combinations, inline image payloads,
+rate-limit and cancellation behavior, crash/restart handling, and orderly
+worker shutdown.
+
+### Windows manual acceptance checklist
+
+Run this on Windows with a standalone `codex.exe`; the Microsoft Store Codex
+app is not required:
+
+1. Select ChatGPT account text backend; browse to standalone `codex.exe`.
+2. Complete browser OAuth and verify account/plan status.
+3. Restart AI File Sorter and verify isolated Codex auth persists.
+4. Verify dynamic model list appears and Auto resolves.
+5. Classify ordinary files with ChatGPT text.
+6. Select ChatGPT vision; analyze a representative PNG/JPEG and verify description + suggested name feed categorization.
+7. Verify a non-image-capable model blocks ChatGPT vision instead of silently degrading.
+8. Verify ChatGPT text + local vision.
+9. Verify local text + ChatGPT vision.
+10. Verify the original image path is absent from development prompt/protocol logs; only the inline data URI is sent.
+11. Cancel an active Codex analysis and verify it stops cleanly.
+12. Sign out and verify both ChatGPT text and vision transition to unauthenticated state.
+13. If possible, exercise device-code login fallback.
+14. Confirm existing OpenAI API-key, Gemini, custom API, local text, and local visual paths still operate.
+
+Status: **Not run in this Linux environment (2026-08-28).** This pass requires a
+Windows Qt/MSVC build and a standalone Codex runtime.
+
 ## App test modes
 
 The production executable supports two developer-oriented test modes:

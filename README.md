@@ -99,6 +99,7 @@ This keeps the first run low risk: your files stay on your computer when you use
   - [Categorization cache and learned behavior](#categorization-cache-and-learned-behavior)
   - [Uninstallation](#uninstallation)
   - [Using your OpenAI API key](#using-your-openai-api-key)
+  - [Using your ChatGPT account (Codex subscription)](#using-your-chatgpt-account-codex-subscription)
   - [Using your Gemini API key](#using-your-gemini-api-key)
   - [Using a custom OpenAI-compatible API](#using-a-custom-openai-compatible-api)
   - [Testing](#testing)
@@ -170,7 +171,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ## Features
 
-- **AI-powered categorization**: Sort files using either local AI models on your computer or remote models with your own API key.
+- **AI-powered categorization**: Sort files using local AI models, remote models with your own API key, or your ChatGPT account through the standalone Codex app-server runtime.
+- **ChatGPT account backend**: Use a ChatGPT subscription for text categorization and image analysis through browser sign-in or device-code sign-in; AI File Sorter does not require the Microsoft Store Codex app.
 - **Offline-Friendly**: Use a local LLM to categorize files entirely - no internet or API key required.
 - **Robust categorization**: Built-in rules and category matching help keep results more consistent across runs.
 - **Configurable categorization controls**: Use whitelists, taxonomy normalization, consistency modes, and review-time edits to steer categories and subcategories.
@@ -246,6 +248,8 @@ More consistent
 
 Image analysis can run locally to understand what a picture shows and suggest a better category or filename. It does not require an API key.
 
+The **ChatGPT account (Codex subscription)** backend is also available as a visual backend. It sends a normalized inline image payload to the Codex runtime; it does not send the original filesystem path. The selected Codex model must advertise image capability. ChatGPT text with a local visual backend and local text with ChatGPT vision are both supported. In v1, a ChatGPT vision image may use one subscription-backed turn to describe the image and a second turn to categorize it, so allow for two turns per image.
+
 As of 1.9.0, **Gemma 3 4B IT** is the default visual backend. The app also gives screenshots, webpage captures, dashboards, forms, mockups, and other UI-like images extra prompt guidance so categories describe what is shown on screen instead of misclassifying the image as the software artifact itself.
 
 The app currently exposes two built-in visual backends: the default Gemma 3 4B IT and LLaVA 1.6 Mistral 7B. In the current embedded runtime, all supported local visual backends require two GGUF files: the main text model and a matching `mmproj` projector file.
@@ -282,7 +286,7 @@ The separate top-level checkbox **Add audio/video metadata to file name (if avai
 
 ## Document analysis (Text LLM)
 
-Document analysis uses the same selected LLM (local or remote) to extract text from supported document files, summarize content, and optionally suggest a better filename. No extra model downloads are required.
+Document analysis uses the same selected LLM (local, API-key, or ChatGPT account backend) to extract text from supported document files, summarize content, and optionally suggest a better filename. Documents remain on the existing text-extraction path; the Codex backend does not receive native document files. No extra model downloads are required.
 
 ### Supported document formats
 
@@ -347,13 +351,13 @@ Tip: quit CPU/GPU‑intensive apps before running the check for more accurate re
 - **Document analysis libraries** (vendored): PDFium, libzip, and pugixml. PDFium is required by default so packaged/source builds keep PDF extraction embedded on Windows, macOS, and Linux; set `-DAI_FILE_SORTER_REQUIRE_EMBEDDED_PDF_BACKEND=OFF` only if you intentionally want the `pdftotext` fallback.
 - **Optional GPU backends**: CUDA 12.x for NVIDIA cards or a Vulkan 1.2+ runtime. On Windows installer/standalone builds, `aifilesorter.exe` auto-detects the best available backend and now prefers CUDA over Vulkan when both are available, falling back to CPU/OpenBLAS automatically. On Linux, the same applies through `run_aifilesorter.sh`; when a dedicated CPU runtime bundle is absent, the launcher can also reuse the staged Vulkan payload for CPU/OpenBLAS fallback, so CUDA is never required to run the app.
 - **Git** (optional): For cloning this repository. Archives can also be downloaded.
-- **Remote model credentials** (optional): Required only when using ChatGPT, Gemini, or a custom OpenAI-compatible API endpoint.
+- **Remote model credentials** (optional): Required only when using the OpenAI API-key, Gemini, or custom OpenAI-compatible API backends. The ChatGPT account backend uses a separate browser/device-code sign-in through the standalone Codex runtime.
 
 ---
 
 ## Installation
 
-File categorization with local LLMs is completely free of charge. If you prefer to use a remote workflow (ChatGPT, Gemini, or a custom OpenAI-compatible endpoint) you will need your own API credentials or endpoint configuration with a suitable quota or local server setup (see [Using your OpenAI API key](#using-your-openai-api-key), [Using your Gemini API key](#using-your-gemini-api-key), or [Using a custom OpenAI-compatible API](#using-a-custom-openai-compatible-api)).
+File categorization with local LLMs is completely free of charge. If you prefer a remote workflow, use an API-key or endpoint configuration with a suitable quota, or sign in to a ChatGPT account through Codex (see [Using your OpenAI API key](#using-your-openai-api-key), [Using your ChatGPT account (Codex subscription)](#using-your-chatgpt-account-codex-subscription), [Using your Gemini API key](#using-your-gemini-api-key), or [Using a custom OpenAI-compatible API](#using-a-custom-openai-compatible-api)).
 
 ### Linux
 
@@ -1161,6 +1165,28 @@ Want to use ChatGPT instead of the bundled local models? Bring your own OpenAI A
 
 ---
 
+## Using your ChatGPT account (Codex subscription)
+
+This option uses the installed standalone `codex.exe` app-server runtime and your ChatGPT subscription. It is separate from the OpenAI API-key backend above: do not paste an API key into the ChatGPT account controls, and do not expect API billing or API model names to apply to this path.
+
+Before selecting this backend, install the standalone Codex runtime and make sure AI File Sorter can find it. The Microsoft Store Codex app is not required. In **Settings -> Select LLM**, choose **ChatGPT account (Codex subscription)** and either accept the discovered runtime or use **Browse…** to select `codex.exe`.
+
+Choose **Sign in with ChatGPT** to complete browser sign-in. If browser sign-in is unavailable, choose **Use device-code sign-in** and complete the displayed device-code flow. AI File Sorter keeps the Codex runtime in an isolated app-data home and uses an isolated inference working directory; it does not ask you to copy authentication files from another profile.
+
+After sign-in, refresh or reopen **Select LLM** to load the runtime's model list. **Auto** uses the runtime-reported default model. ChatGPT vision requires an explicitly selected model that advertises image capability when no suitable default is reported; a text-only model is rejected instead of silently falling back. The **Visual model** selector can choose `chatgpt` independently of the text backend, so these combinations are valid:
+
+- ChatGPT text + local visual model.
+- Local text model + ChatGPT visual model.
+- ChatGPT text + ChatGPT visual model.
+
+For ChatGPT vision, the image is normalized and sent as an inline PNG data URI. The source path is not included in the image-analysis request. Images can consume two subscription-backed turns in v1: one for the visual description and one for text categorization. Documents continue to use extracted text and do not use native Codex file uploads.
+
+The app stores the selected executable path, ChatGPT model, and visual backend selection in its normal settings. OAuth access and refresh tokens are not stored in AI File Sorter's `config.ini`; authentication state is owned by the isolated Codex runtime home. AI File Sorter does not automatically download or update `codex.exe`; install and update that runtime through your normal Codex distribution channel.
+
+See [Configuration and environment](docs/configuration-and-environment.md) for discovery order, platform paths, and troubleshooting.
+
+---
+
 ## Using your Gemini API key
 
 Prefer Google's models? Use your own Gemini API key:
@@ -1201,6 +1227,7 @@ Use this option for local servers or remote providers that follow the OpenAI-sty
 
 - The script configures to `../build-tests`, builds, then runs `ctest`.
 - If you have multiple copies of the repo (e.g., `ai-file-sorter` and `ai-file-sorter-mac-dist`), each needs its own `build-tests` folder; reusing one from a different path will make CMake complain about mismatched source/build directories.
+- ChatGPT/Codex feature tests use a fake local app-server and do not require a ChatGPT account or network access. The Windows-only account, model, image, cancellation, sign-out, and compatibility acceptance checklist is documented in [TESTS.md](TESTS.md); it has not been run in this Linux environment.
 
 ---
 
