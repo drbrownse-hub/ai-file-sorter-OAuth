@@ -56,6 +56,10 @@ public:
                                        const std::function<bool()>& cancelled);
     void interrupt_turn(std::string_view thread_id, std::string_view turn_id);
 
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    void set_test_active_turn_hook(std::function<void()> hook);
+#endif
+
 signals:
     void transportStateChanged();
     void notificationReceived();
@@ -107,6 +111,10 @@ private:
     bool stopping_{false};
     bool initializing_{false};
     bool initialized_{false};
+
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    std::function<void()> test_active_turn_hook_;
+#endif
 
     static constexpr std::size_t max_pending_notifications_ = 256;
 };

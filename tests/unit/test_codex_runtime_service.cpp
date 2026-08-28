@@ -299,6 +299,190 @@ TEST_CASE("Codex runtime serializes concurrent text and image turns")
     CHECK(second_start < second_complete);
 }
 
+TEST_CASE("Codex runtime interrupts an active turn when cancellation is requested")
+{
+    FakeRuntimeEnvironment environment("slow-turn");
+    QTemporaryDir temp;
+    REQUIRE(temp.isValid());
+    CodexRuntimeService service;
+    service.configure(runtime_config(temp.path().toStdString()));
+    service.start_or_refresh_async();
+    REQUIRE(wait_until([&] { return service.snapshot().authenticated; }));
+
+    std::exception_ptr failure;
+    std::atomic<bool> active_turn_established{false};
+    service.set_test_active_turn_hook([&] {
+        active_turn_established.store(true, std::memory_order_release);
+        service.cancel_active_turn_async();
+    });
+    std::thread worker([&] {
+        try {
+            static_cast<void>(service.run_turn(turn_request()));
+        } catch (...) {
+            failure = std::current_exception();
+        }
+    });
+    REQUIRE(wait_until([&] { return active_turn_established.load(std::memory_order_acquire); }));
+    worker.join();
+
+    REQUIRE(failure);
+    try {
+        std::rethrow_exception(failure);
+    } catch (const CodexError& error) {
+        CHECK(error.kind() == CodexErrorKind::Cancelled);
+    }
+    CHECK(count_events(environment, "request turn/interrupt") == 1);
+    CHECK(service.snapshot().running);
+}
+
+TEST_CASE("Codex runtime reports server overload as a rate-limit error")
+{
+    FakeRuntimeEnvironment environment("runtime-rate-limited");
+    QTemporaryDir temp;
+    REQUIRE(temp.isValid());
+    CodexRuntimeService service;
+    service.configure(runtime_config(temp.path().toStdString()));
+    service.start_or_refresh_async();
+    REQUIRE(wait_until([&] { return service.snapshot().authenticated; }));
+
+    try {
+        static_cast<void>(service.run_turn(turn_request()));
+        FAIL("expected rate-limit error");
+    } catch (const CodexError& error) {
+        CHECK(error.kind() == CodexErrorKind::RateLimited);
+        CHECK(std::string(error.what()).find("retry") != std::string::npos);
+    }
+    CHECK(service.snapshot().running);
+    CHECK_FALSE(contains_event(environment, "turn-complete"));
+}
+
+TEST_CASE("Codex runtime shutdown cancels an active turn before waiting")
+{
+    FakeRuntimeEnvironment environment("slow-turn");
+    QTemporaryDir temp;
+    REQUIRE(temp.isValid());
+    auto service = std::make_unique<CodexRuntimeService>();
+    service->configure(runtime_config(temp.path().toStdString()));
+    service->start_or_refresh_async();
+    REQUIRE(wait_until([&] { return service->snapshot().authenticated; }));
+
+    std::exception_ptr failure;
+    std::atomic<bool> run_returned{false};
+    std::thread worker([&] {
+        try {
+            static_cast<void>(service->run_turn(turn_request()));
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        run_returned.store(true, std::memory_order_release);
+    });
+    REQUIRE(wait_until([&] { return contains_event(environment, "turn-start"); }));
+
+    QElapsedTimer shutdown_timer;
+    shutdown_timer.start();
+    service.reset();
+    CHECK(run_returned.load(std::memory_order_acquire));
+    worker.join();
+
+    CHECK(shutdown_timer.elapsed() < 1500);
+    REQUIRE(failure);
+    try {
+        std::rethrow_exception(failure);
+    } catch (const CodexError& error) {
+        CHECK(error.kind() == CodexErrorKind::Cancelled);
+    }
+}
+
+TEST_CASE("Codex runtime shutdown waits for turn unwinding after operation completion")
+{
+    FakeRuntimeEnvironment environment("slow-turn");
+    QTemporaryDir temp;
+    REQUIRE(temp.isValid());
+    auto service = std::make_unique<CodexRuntimeService>();
+    service->configure(runtime_config(temp.path().toStdString()));
+    service->start_or_refresh_async();
+    REQUIRE(wait_until([&] { return service->snapshot().authenticated; }));
+
+    std::mutex gate_mutex;
+    std::condition_variable gate_changed;
+    bool run_hook_entered = false;
+    bool allow_run_unwind = false;
+    bool destructor_hook_entered = false;
+    bool allow_destructor = false;
+    std::exception_ptr failure;
+    std::atomic<bool> run_returned{false};
+
+    service->set_test_run_turn_unwind_hook([&] {
+        std::unique_lock lock(gate_mutex);
+        run_hook_entered = true;
+        gate_changed.notify_all();
+        gate_changed.wait(lock, [&] { return allow_run_unwind; });
+    });
+    service->set_test_destructor_before_shutdown_hook([&] {
+        std::unique_lock lock(gate_mutex);
+        destructor_hook_entered = true;
+        gate_changed.notify_all();
+        gate_changed.wait(lock, [&] { return allow_destructor; });
+    });
+
+    std::thread worker([&] {
+        try {
+            static_cast<void>(service->run_turn(turn_request()));
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        run_returned.store(true, std::memory_order_release);
+    });
+    REQUIRE(wait_until([&] { return contains_event(environment, "turn-ready"); }));
+    service->cancel_active_turn_async();
+    REQUIRE(wait_until([&] {
+        std::lock_guard lock(gate_mutex);
+        return run_hook_entered;
+    }));
+
+    std::thread destroyer([&] { service.reset(); });
+    {
+        std::unique_lock lock(gate_mutex);
+        CHECK(gate_changed.wait_for(lock, std::chrono::milliseconds(250), [&] {
+            return destructor_hook_entered;
+        }) == false);
+        allow_run_unwind = true;
+        gate_changed.notify_all();
+    }
+    worker.join();
+    CHECK(run_returned.load(std::memory_order_acquire));
+    REQUIRE(failure);
+    try {
+        std::rethrow_exception(failure);
+    } catch (const CodexError& error) {
+        CHECK(error.kind() == CodexErrorKind::Cancelled);
+    }
+
+    {
+        std::unique_lock lock(gate_mutex);
+        REQUIRE(gate_changed.wait_for(lock, std::chrono::seconds(1), [&] {
+            return destructor_hook_entered;
+        }));
+        allow_destructor = true;
+        gate_changed.notify_all();
+    }
+    destroyer.join();
+}
+
+TEST_CASE("Codex runtime destroys its worker on the worker thread")
+{
+    ensure_qt_application();
+    auto service = std::make_unique<CodexRuntimeService>();
+    std::atomic<bool> destroyed_on_owner_thread{false};
+    service->set_test_worker_destruction_hook([&](bool owner_thread) {
+        destroyed_on_owner_thread.store(owner_thread, std::memory_order_release);
+    });
+
+    service.reset();
+
+    CHECK(destroyed_on_owner_thread.load(std::memory_order_acquire));
+}
+
 TEST_CASE("Codex runtime restarts only on the next operation after a crash")
 {
     FakeRuntimeEnvironment environment("crash-once");

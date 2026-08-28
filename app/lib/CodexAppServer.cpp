@@ -290,6 +290,11 @@ CodexTurnResult CodexAppServer::run_ephemeral_turn(const CodexTurnRequest& turn_
     }
 
     active_turn_ = ActiveTurn{.thread_id = thread_id, .turn_id = turn_id};
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    if (test_active_turn_hook_) {
+        test_active_turn_hook_();
+    }
+#endif
     for (const Json::Value& notification : notifications_) {
         process_notification(notification);
     }
@@ -325,6 +330,14 @@ void CodexAppServer::interrupt_turn(std::string_view thread_id, std::string_view
     params["turnId"] = std::string(turn_id);
     notify("turn/interrupt", params);
 }
+
+#ifdef AI_FILE_SORTER_TEST_BUILD
+void CodexAppServer::set_test_active_turn_hook(std::function<void()> hook)
+{
+    ensure_owner_thread();
+    test_active_turn_hook_ = std::move(hook);
+}
+#endif
 
 void CodexAppServer::ensure_owner_thread() const
 {

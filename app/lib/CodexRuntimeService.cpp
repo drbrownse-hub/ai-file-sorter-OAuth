@@ -22,6 +22,11 @@
 struct CodexRuntimeSharedState {
     mutable std::mutex mutex;
     CodexRuntimeSnapshot snapshot;
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    mutable std::mutex test_hook_mutex;
+    std::function<void()> active_turn_hook;
+    std::function<void(bool)> worker_destruction_hook;
+#endif
 };
 
 namespace {
@@ -132,7 +137,19 @@ public:
     {
     }
 
-    ~CodexRuntimeWorker() override = default;
+    ~CodexRuntimeWorker() override
+    {
+#ifdef AI_FILE_SORTER_TEST_BUILD
+        std::function<void(bool)> hook;
+        {
+            std::lock_guard lock(state_->test_hook_mutex);
+            hook = state_->worker_destruction_hook;
+        }
+        if (hook) {
+            hook(QThread::currentThread() == thread());
+        }
+#endif
+    }
 
     void enqueue(std::function<void()> operation)
     {
@@ -386,6 +403,18 @@ private:
                     &CodexRuntimeWorker::on_transport_state_changed);
             connect(app_server_.get(), &CodexAppServer::accountNotificationReceived, this,
                     &CodexRuntimeWorker::on_account_notification);
+#ifdef AI_FILE_SORTER_TEST_BUILD
+            app_server_->set_test_active_turn_hook([this] {
+                std::function<void()> hook;
+                {
+                    std::lock_guard lock(state_->test_hook_mutex);
+                    hook = state_->active_turn_hook;
+                }
+                if (hook) {
+                    hook();
+                }
+            });
+#endif
         }
     }
 
@@ -597,6 +626,7 @@ CodexRuntimeService::CodexRuntimeService(QObject* parent)
             Qt::QueuedConnection);
     connect(worker_, &CodexRuntimeWorker::deviceCodeReady, this, &CodexRuntimeService::deviceCodeReady,
             Qt::QueuedConnection);
+    connect(worker_thread_, &QThread::finished, worker_, &QObject::deleteLater);
     worker_thread_->start();
 }
 
@@ -605,7 +635,12 @@ CodexRuntimeService::~CodexRuntimeService()
     if (!worker_) {
         return;
     }
+    cancel_active_turn_async();
+    std::unique_lock turn_lock(turn_mutex_);
     wait_for_operations();
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    invoke_test_destructor_before_shutdown_hook();
+#endif
     std::mutex completion_mutex;
     std::condition_variable completion_finished;
     bool complete = false;
@@ -632,7 +667,6 @@ CodexRuntimeService::~CodexRuntimeService()
     }
     worker_thread_->quit();
     worker_thread_->wait();
-    delete worker_;
     worker_ = nullptr;
 }
 
@@ -712,6 +746,64 @@ void CodexRuntimeService::start_or_refresh_async()
     }
 }
 
+void CodexRuntimeService::cancel_active_turn_async() noexcept
+{
+    std::lock_guard lock(turn_state_mutex_);
+    if (active_turn_.load(std::memory_order_acquire)) {
+        cancel_active_turn_.store(true, std::memory_order_release);
+    }
+}
+
+#ifdef AI_FILE_SORTER_TEST_BUILD
+void CodexRuntimeService::set_test_run_turn_unwind_hook(std::function<void()> hook)
+{
+    std::lock_guard lock(test_hook_mutex_);
+    test_run_turn_unwind_hook_ = std::move(hook);
+}
+
+void CodexRuntimeService::set_test_destructor_before_shutdown_hook(std::function<void()> hook)
+{
+    std::lock_guard lock(test_hook_mutex_);
+    test_destructor_before_shutdown_hook_ = std::move(hook);
+}
+
+void CodexRuntimeService::set_test_active_turn_hook(std::function<void()> hook)
+{
+    std::lock_guard lock(state_->test_hook_mutex);
+    state_->active_turn_hook = std::move(hook);
+}
+
+void CodexRuntimeService::set_test_worker_destruction_hook(std::function<void(bool)> hook)
+{
+    std::lock_guard lock(state_->test_hook_mutex);
+    state_->worker_destruction_hook = std::move(hook);
+}
+
+void CodexRuntimeService::invoke_test_run_turn_unwind_hook()
+{
+    std::function<void()> hook;
+    {
+        std::lock_guard lock(test_hook_mutex_);
+        hook = test_run_turn_unwind_hook_;
+    }
+    if (hook) {
+        hook();
+    }
+}
+
+void CodexRuntimeService::invoke_test_destructor_before_shutdown_hook()
+{
+    std::function<void()> hook;
+    {
+        std::lock_guard lock(test_hook_mutex_);
+        hook = test_destructor_before_shutdown_hook_;
+    }
+    if (hook) {
+        hook();
+    }
+}
+#endif
+
 void CodexRuntimeService::begin_chatgpt_login_async()
 {
     begin_operation();
@@ -758,15 +850,29 @@ CodexTurnResult CodexRuntimeService::run_turn(const CodexTurnRequest& request,
                                               const std::function<bool()>& cancelled)
 {
     std::lock_guard lock(turn_mutex_);
+    {
+        std::lock_guard turn_state_lock(turn_state_mutex_);
+        cancel_active_turn_.store(false, std::memory_order_release);
+        active_turn_.store(true, std::memory_order_release);
+    }
+    const std::unique_ptr<void, std::function<void(void*)>> turn_guard(
+        reinterpret_cast<void*>(1), [this](void*) noexcept {
+            std::lock_guard lock(turn_state_mutex_);
+            cancel_active_turn_.store(false, std::memory_order_release);
+            active_turn_.store(false, std::memory_order_release);
+        });
     begin_operation();
     std::mutex completion_mutex;
     std::condition_variable completion_finished;
     bool complete = false;
     CodexTurnResult result;
     std::exception_ptr failure;
+    const auto combined_cancelled = [this, &cancelled] {
+        return cancel_active_turn_.load(std::memory_order_acquire) || (cancelled && cancelled());
+    };
     auto operation = [&] {
         try {
-            result = worker_->run_turn(request, cancelled);
+            result = worker_->run_turn(request, combined_cancelled);
         } catch (...) {
             failure = std::current_exception();
         }
@@ -795,6 +901,9 @@ CodexTurnResult CodexRuntimeService::run_turn(const CodexTurnRequest& request,
         completion_finished.wait(completion_lock, [&] { return complete; });
     }
     end_operation();
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    invoke_test_run_turn_unwind_hook();
+#endif
     if (failure) {
         std::rethrow_exception(failure);
     }

@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QUrl>
 
+#include <atomic>
 #include <cstddef>
 #include <condition_variable>
 #include <functional>
@@ -53,9 +54,23 @@ public:
     CodexRuntimeSnapshot snapshot() const;
 
     void start_or_refresh_async();
+    /**
+     * @brief Request cancellation of the currently running inference turn.
+     *
+     * The request is thread-safe and returns immediately. It affects only an
+     * active turn; the next turn starts with a clear cancellation state.
+     */
+    void cancel_active_turn_async() noexcept;
     void begin_chatgpt_login_async();
     void begin_device_code_login_async();
     void logout_async();
+
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    void set_test_run_turn_unwind_hook(std::function<void()> hook);
+    void set_test_destructor_before_shutdown_hook(std::function<void()> hook);
+    void set_test_active_turn_hook(std::function<void()> hook);
+    void set_test_worker_destruction_hook(std::function<void(bool)> hook);
+#endif
 
     CodexTurnResult run_turn(const CodexTurnRequest& request,
                              const std::function<bool()>& cancelled = {});
@@ -75,7 +90,19 @@ private:
     QThread* worker_thread_;
     CodexRuntimeWorker* worker_;
     mutable std::mutex turn_mutex_;
+    mutable std::mutex turn_state_mutex_;
     mutable std::mutex operation_mutex_;
     std::condition_variable operation_finished_;
     std::size_t active_operations_{0};
+    std::atomic<bool> active_turn_{false};
+    std::atomic<bool> cancel_active_turn_{false};
+
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    mutable std::mutex test_hook_mutex_;
+    std::function<void()> test_run_turn_unwind_hook_;
+    std::function<void()> test_destructor_before_shutdown_hook_;
+
+    void invoke_test_run_turn_unwind_hook();
+    void invoke_test_destructor_before_shutdown_hook();
+#endif
 };
