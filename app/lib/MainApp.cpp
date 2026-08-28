@@ -7,6 +7,10 @@
 #include "CategorizationSession.hpp"
 #include "CacheMaintenanceDialog.hpp"
 #include "CacheMaintenanceService.hpp"
+#include "CodexBackendIds.hpp"
+#include "CodexClient.hpp"
+#include "CodexImageAnalyzer.hpp"
+#include "CodexRuntimeService.hpp"
 #include "DialogUtils.hpp"
 #include "ErrorMessages.hpp"
 #include "ExplorerExtensionEntitlement.hpp"
@@ -608,6 +612,7 @@ MainApp::MainApp(Settings& settings,
       storage_plugin_loader_(StoragePluginManager::manifest_directory_for_config_dir(runtime_data_dir_)),
       categorization_service(settings, db_manager, core_logger, &user_learning_store_),
       consistency_pass_service(db_manager, core_logger),
+      codex_runtime_(std::make_shared<CodexRuntimeService>()),
       storage_provider_registry_(),
       active_storage_provider_(std::make_shared<LocalFsProvider>()),
       results_coordinator(*active_storage_provider_),
@@ -648,13 +653,18 @@ MainApp::MainApp(Settings& settings,
     }
 #endif
     load_settings();
+    configure_codex_runtime();
     refresh_backend_status_label();
     set_app_icon();
     start_analysis_runtime_lock_polling();
 }
 
 
-MainApp::~MainApp() = default;
+MainApp::~MainApp()
+{
+    shutdown();
+    codex_runtime_.reset();
+}
 
 
 void MainApp::run()
@@ -1078,6 +1088,22 @@ void MainApp::load_settings()
     retranslate_ui();
 }
 
+void MainApp::configure_codex_runtime()
+{
+    if (!codex_runtime_) {
+        return;
+    }
+
+    CodexRuntimeConfig config;
+    config.executable_path = settings.get_codex_executable_path();
+    config.application_directory = QCoreApplication::applicationDirPath().toStdString();
+    config.codex_home = Utils::path_to_utf8(Utils::utf8_to_path(runtime_data_dir_) / "codex");
+    config.model = settings.get_chatgpt_model();
+    config.client_version = APP_VERSION.to_numeric_string();
+    codex_runtime_->configure(std::move(config));
+    codex_runtime_->start_or_refresh_async();
+}
+
 
 void MainApp::save_settings()
 {
@@ -1309,6 +1335,8 @@ QString MainApp::current_backend_status_text() const
             return tr("Loaded backend: OpenAI API");
         case LLMChoice::Remote_Gemini:
             return tr("Loaded backend: Gemini API");
+        case LLMChoice::Remote_ChatGPT:
+            return tr("Loaded backend: ChatGPT Codex");
         case LLMChoice::Remote_Custom:
             return tr("Loaded backend: Custom API");
         default:
@@ -1540,17 +1568,49 @@ void MainApp::on_analyze_clicked()
         return;
     }
 
-    if (!using_local_llm) {
+    const bool chatgpt_text = settings.get_llm_choice() == LLMChoice::Remote_ChatGPT;
+    const bool chatgpt_vision = settings.get_analyze_images_by_content() &&
+                                settings.get_visual_model_id() == kChatGptVisualBackendId;
+    const bool needs_chatgpt = chatgpt_text || chatgpt_vision;
+    const bool needs_remote_network = is_remote_choice(settings.get_llm_choice()) || chatgpt_vision;
+
+    if (needs_remote_network) {
         if (!Utils::is_network_available()) {
             show_error_dialog(ERR_NO_INTERNET_CONNECTION);
             core_logger->warn("Network unavailable when attempting to analyze '{}'", folder_path);
             return;
         }
-        std::string credential_error;
-        if (!categorization_service.ensure_remote_credentials(&credential_error)) {
-            show_error_dialog(credential_error.empty()
-                                  ? "Remote model credentials are missing or invalid. Please configure your API key and try again."
-                                  : credential_error);
+        if (settings.get_llm_choice() == LLMChoice::Remote_OpenAI ||
+            settings.get_llm_choice() == LLMChoice::Remote_Gemini ||
+            settings.get_llm_choice() == LLMChoice::Remote_Custom) {
+            std::string credential_error;
+            if (!categorization_service.ensure_remote_credentials(&credential_error)) {
+                show_error_dialog(credential_error.empty()
+                                      ? "Remote model credentials are missing or invalid. Please configure your API key and try again."
+                                      : credential_error);
+                return;
+            }
+        }
+    }
+
+    if (needs_chatgpt) {
+        const CodexRuntimeSnapshot snapshot = codex_runtime_->snapshot();
+        if (!snapshot.runtime_found || !snapshot.running || !snapshot.authenticated) {
+            show_error_dialog("ChatGPT is not ready. Install the Codex runtime and sign in before analyzing.");
+            return;
+        }
+
+        const std::string model = settings.get_chatgpt_model();
+        const auto model_it = std::find_if(snapshot.models.begin(), snapshot.models.end(),
+                                           [&model](const CodexModelInfo& item) {
+                                               return item.id == model;
+                                           });
+        if (!model.empty() && model_it == snapshot.models.end()) {
+            show_error_dialog("The selected ChatGPT model is unavailable. Please choose another model.");
+            return;
+        }
+        if (chatgpt_vision && !codex_runtime_->selected_model_accepts_images(model)) {
+            show_error_dialog("The selected ChatGPT model does not support image analysis.");
             return;
         }
     }
@@ -2867,6 +2927,12 @@ AnalysisWorkflowContext MainApp::make_analysis_workflow_context()
         [this](const std::string& reason) { return prompt_continue_without_visual_analysis(reason); },
         [this](const CategorizedFile& entry, const std::string& reason) {
             notify_recategorization_reset(entry, reason);
+        },
+        [this]() -> std::unique_ptr<ImageAnalyzer> {
+            if (settings.get_visual_model_id() != kChatGptVisualBackendId) {
+                return {};
+            }
+            return std::make_unique<CodexImageAnalyzer>(codex_runtime_, settings.get_chatgpt_model());
         }};
 }
 
@@ -3189,7 +3255,7 @@ void MainApp::stop_running_analysis()
 void MainApp::show_llm_selection_dialog()
 {
     try {
-        auto dialog = std::make_unique<LLMSelectionDialog>(settings, this);
+        auto dialog = std::make_unique<LLMSelectionDialog>(settings, codex_runtime_, this);
         if (dialog->exec() == QDialog::Accepted) {
             settings.set_openai_api_key(dialog->get_openai_api_key());
             settings.set_openai_model(dialog->get_openai_model());
@@ -3199,6 +3265,9 @@ void MainApp::show_llm_selection_dialog()
             settings.set_llm_downloads_expanded(dialog->get_llm_downloads_expanded());
             settings.set_llm_storage_dir(dialog->get_llm_storage_dir());
             settings.set_visual_model_id(dialog->get_selected_visual_model_id());
+            settings.set_codex_executable_path(dialog->get_codex_executable_path());
+            settings.set_chatgpt_model(dialog->get_chatgpt_model());
+            configure_codex_runtime();
             if (dialog->get_selected_llm_choice() == LLMChoice::Custom) {
                 settings.set_active_custom_llm_id(dialog->get_selected_custom_llm_id());
             } else {
@@ -3401,6 +3470,13 @@ std::unique_ptr<ILLMClient> MainApp::make_llm_client()
         return client;
     }
 
+    if (choice == LLMChoice::Remote_ChatGPT) {
+        auto client = std::make_unique<CodexClient>(codex_runtime_, settings.get_chatgpt_model());
+        client->set_prompt_logging_enabled(should_log_prompts());
+        schedule_backend_status_label_refresh();
+        return client;
+    }
+
     if (choice == LLMChoice::Remote_Gemini) {
         const std::string api_key = settings.get_gemini_api_key();
         const std::string model = settings.get_gemini_model();
@@ -3431,6 +3507,17 @@ std::unique_ptr<ILLMClient> MainApp::make_llm_client()
         if (custom.id.empty() || custom.path.empty()) {
             throw std::runtime_error("Selected custom LLM is missing or invalid. Please re-select it.");
         }
+#ifdef AI_FILE_SORTER_TEST_BUILD
+        if (local_llm_client_factory_override_) {
+            auto client = local_llm_client_factory_override_(custom.path);
+            if (!client) {
+                throw std::runtime_error("Test local LLM client factory returned no client.");
+            }
+            client->set_prompt_logging_enabled(should_log_prompts());
+            schedule_backend_status_label_refresh();
+            return client;
+        }
+#endif
         auto client = std::make_unique<LocalLLMClient>(
             custom.path,
             [this](const std::string& reason) { return prompt_text_cpu_fallback(reason); });

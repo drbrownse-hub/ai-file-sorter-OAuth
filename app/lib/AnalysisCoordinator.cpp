@@ -4,6 +4,7 @@
 #include "AnalysisProgress.hpp"
 #include "CategoryDateSuffix.hpp"
 #include "CategorizationService.hpp"
+#include "CodexBackendIds.hpp"
 #include "DatabaseManager.hpp"
 #include "DocumentTextAnalyzer.hpp"
 #include "FilenameLocalizationService.hpp"
@@ -935,18 +936,23 @@ AnalysisRunResult AnalysisCoordinator::execute()
                 }
             };
 
-            std::string error;
-            auto visual_backend =
-                VisualLlmRuntime::resolve_active_backend(app_.settings.get_visual_model_id(),
-                                                         app_.settings.get_custom_llms(),
-                                                         &error);
-            if (!visual_backend) {
-                throw std::runtime_error(error);
-            }
-            if (app_.core_logger && visual_backend->descriptor) {
-                app_.core_logger->info("Using visual backend '{}' ({})",
-                                       visual_backend->descriptor->display_name,
-                                       visual_backend->descriptor->id);
+            const bool use_chatgpt_vision =
+                app_.settings.get_visual_model_id() == kChatGptVisualBackendId;
+            std::optional<VisualLlmRuntime::Backend> visual_backend;
+            if (!use_chatgpt_vision) {
+                std::string error;
+                visual_backend =
+                    VisualLlmRuntime::resolve_active_backend(app_.settings.get_visual_model_id(),
+                                                             app_.settings.get_custom_llms(),
+                                                             &error);
+                if (!visual_backend) {
+                    throw std::runtime_error(error);
+                }
+                if (app_.core_logger && visual_backend->descriptor) {
+                    app_.core_logger->info("Using visual backend '{}' ({})",
+                                           visual_backend->descriptor->display_name,
+                                           visual_backend->descriptor->id);
+                }
             }
 
             ImageAnalyzerSettings vision_settings;
@@ -969,7 +975,7 @@ AnalysisRunResult AnalysisCoordinator::execute()
             vision_settings.log_visual_output = app_.should_log_prompts();
 
             const bool allow_visual_cpu_fallback =
-                vision_settings.use_gpu && !visual_gpu_override.has_value();
+                !use_chatgpt_vision && vision_settings.use_gpu && !visual_gpu_override.has_value();
             std::optional<bool> visual_cpu_fallback_choice;
             bool visual_cpu_fallback_active = false;
 
@@ -1090,6 +1096,16 @@ AnalysisRunResult AnalysisCoordinator::execute()
             };
 
             auto create_analyzer = [&]() -> std::unique_ptr<ImageAnalyzer> {
+                if (use_chatgpt_vision) {
+                    if (!app_.make_remote_image_analyzer) {
+                        throw std::runtime_error("ChatGPT visual analyzer factory is unavailable.");
+                    }
+                    auto analyzer = app_.make_remote_image_analyzer();
+                    if (!analyzer) {
+                        throw std::runtime_error("ChatGPT visual analyzer factory returned no analyzer.");
+                    }
+                    return analyzer;
+                }
                 return ImageAnalyzerFactory::create(*visual_backend, vision_settings);
             };
 
@@ -1326,7 +1342,23 @@ AnalysisRunResult AnalysisCoordinator::execute()
                                                            entry.file_name,
                                                            ex.what());
                                 }
-                                handle_visual_failure(entry, ex.what(), already_renamed, true, visual_only);
+                                if (use_chatgpt_vision) {
+                                    confirm_visual_filename_fallback(ex.what());
+                                    handle_visual_failure(entry,
+                                                          ex.what(),
+                                                          already_renamed,
+                                                          true,
+                                                          visual_only);
+                                    app_.append_progress(to_utf8(app_.tr(
+                                        "[VISION] Visual analysis disabled; falling back to filenames.")));
+                                    stop_visual_analysis = true;
+                                } else {
+                                    handle_visual_failure(entry,
+                                                          ex.what(),
+                                                          already_renamed,
+                                                          true,
+                                                          visual_only);
+                                }
                             }
                             app_.mark_progress_stage_item_skipped(ProgressStageId::ImageAnalysis, entry);
                             break;

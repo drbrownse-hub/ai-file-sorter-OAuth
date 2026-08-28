@@ -1,6 +1,10 @@
 #include "LLMSelectionVisualBackendModel.hpp"
 
+#include "CodexBackendIds.hpp"
+
 #include <algorithm>
+#include <QObject>
+#include <utility>
 
 namespace LLMSelectionVisualBackendModel {
 
@@ -19,8 +23,21 @@ std::vector<LLMSelectionVisualBackendItem> build_visual_backend_items(
     const QString& recommended_label,
     const QString& custom_label_template)
 {
+    return build_visual_backend_items(custom_llms,
+                                      recommended_label,
+                                      custom_label_template,
+                                      ChatGptVisualOption{false, false, {}});
+}
+
+std::vector<LLMSelectionVisualBackendItem> build_visual_backend_items(
+    const std::vector<CustomLLM>& custom_llms,
+    const QString& recommended_label,
+    const QString& custom_label_template,
+    ChatGptVisualOption chatgpt_option)
+{
     std::vector<LLMSelectionVisualBackendItem> items;
-    items.reserve(visual_model_descriptors().size() + custom_llms.size());
+    items.reserve(visual_model_descriptors().size() + custom_llms.size() +
+                  (chatgpt_option.visible ? 1 : 0));
 
     for (const auto& backend : visual_model_descriptors()) {
         items.push_back({visual_backend_combo_label(backend, recommended_label),
@@ -33,6 +50,13 @@ std::vector<LLMSelectionVisualBackendItem> build_visual_backend_items(
         }
         items.push_back({custom_label_template.arg(QString::fromStdString(custom.name)),
                          custom_visual_model_id_for_llm(custom.id)});
+    }
+
+    if (chatgpt_option.visible) {
+        items.push_back({QObject::tr("ChatGPT vision (subscription)"),
+                         std::string(kChatGptVisualBackendId),
+                         chatgpt_option.enabled,
+                         std::move(chatgpt_option.unavailable_reason)});
     }
 
     return items;
@@ -67,6 +91,9 @@ std::string choose_visual_backend_id(std::string_view requested_id,
 
 const VisualModelDescriptor* selected_visual_model_descriptor(std::string_view selected_id)
 {
+    if (selected_id == kChatGptVisualBackendId) {
+        return nullptr;
+    }
     if (is_custom_visual_model_id(selected_id)) {
         return &custom_visual_model_descriptor();
     }
@@ -78,6 +105,9 @@ const VisualModelDescriptor* selected_visual_model_descriptor(std::string_view s
 
 std::string canonical_visual_backend_id(std::string_view selected_id)
 {
+    if (selected_id == kChatGptVisualBackendId) {
+        return std::string(kChatGptVisualBackendId);
+    }
     if (is_custom_visual_model_id(selected_id)) {
         return std::string(selected_id);
     }

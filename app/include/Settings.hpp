@@ -63,6 +63,10 @@ public:
      * @param model OpenAI model name to store.
      */
     void set_openai_model(const std::string& model);
+    std::string get_codex_executable_path() const;
+    void set_codex_executable_path(const std::string& path);
+    std::string get_chatgpt_model() const;
+    void set_chatgpt_model(const std::string& model);
     /**
      * @brief Returns the stored Gemini API key.
      * @return Gemini API key string.
@@ -684,6 +688,8 @@ private:
     LLMChoice llm_choice = LLMChoice::Unset;
     std::string openai_api_key;
     std::string openai_model{ "gpt-4o-mini" };
+    std::string codex_executable_path;
+    std::string chatgpt_model;
     std::string gemini_api_key;
     std::string gemini_model{ "gemini-2.5-flash-lite" };
     int remote_requests_per_minute{0};

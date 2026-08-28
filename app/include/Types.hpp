@@ -7,6 +7,7 @@ enum class LLMChoice {
     Unset,
     Remote_OpenAI,
     Remote_Gemini,
+    Remote_ChatGPT,
     Remote_Custom, ///< Custom OpenAI-compatible endpoint.
     Local_4b_Gemma,
     Local_3b_legacy,
@@ -18,6 +19,7 @@ enum class LLMChoice {
 inline bool is_remote_choice(LLMChoice choice) {
     return choice == LLMChoice::Remote_OpenAI
         || choice == LLMChoice::Remote_Gemini
+        || choice == LLMChoice::Remote_ChatGPT
         || choice == LLMChoice::Remote_Custom;
 }
 

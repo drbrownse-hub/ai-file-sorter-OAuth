@@ -16,9 +16,20 @@
 struct LLMSelectionVisualBackendItem {
     QString label;
     std::string id;
+    bool enabled{true};
+    QString unavailable_reason;
 };
 
 namespace LLMSelectionVisualBackendModel {
+
+/**
+ * @brief Availability state for the synthetic ChatGPT visual option.
+ */
+struct ChatGptVisualOption {
+    bool visible{true};
+    bool enabled{false};
+    QString unavailable_reason;
+};
 
 /**
  * @brief Build a display label for a built-in visual backend.
@@ -42,6 +53,20 @@ std::vector<LLMSelectionVisualBackendItem> build_visual_backend_items(
     const QString& custom_label_template);
 
 /**
+ * @brief Build local/custom visual items plus an explicitly configured ChatGPT option.
+ * @param custom_llms Configured custom local LLMs.
+ * @param recommended_label Localized text for the recommended marker.
+ * @param custom_label_template Localized template containing `%1` for the custom LLM name.
+ * @param chatgpt_option Visibility and capability state for ChatGPT vision.
+ * @return Ordered combo items.
+ */
+std::vector<LLMSelectionVisualBackendItem> build_visual_backend_items(
+    const std::vector<CustomLLM>& custom_llms,
+    const QString& recommended_label,
+    const QString& custom_label_template,
+    ChatGptVisualOption chatgpt_option);
+
+/**
  * @brief Pick the best selectable visual backend id.
  * @param requested_id Previously selected or requested backend id.
  * @param items Available combo items.
@@ -62,7 +87,8 @@ int index_of_visual_backend_id(const std::vector<LLMSelectionVisualBackendItem>&
 /**
  * @brief Return the effective descriptor for a selected visual backend id.
  * @param selected_id Selected visual backend id.
- * @return Custom descriptor for custom ids, matching built-in descriptor, or default descriptor.
+ * @return Custom descriptor for custom ids, matching built-in descriptor, default descriptor, or
+ *         nullptr for the synthetic ChatGPT id.
  */
 const VisualModelDescriptor* selected_visual_model_descriptor(std::string_view selected_id);
 

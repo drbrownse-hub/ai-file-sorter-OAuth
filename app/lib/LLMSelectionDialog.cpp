@@ -1,6 +1,7 @@
 #include "LLMSelectionDialog.hpp"
 
 #include "AppIconResources.hpp"
+#include "CodexBackendIds.hpp"
 #include "DialogUtils.hpp"
 #include "LlmCatalog.hpp"
 #include "LLMSelectionVisualBackendModel.hpp"
@@ -18,6 +19,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QDialogButtonBox>
+#include <QDesktopServices>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -37,12 +39,14 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QScrollArea>
+#include <QStandardItemModel>
 #include <QTimer>
 #include <QStyle>
 #include <QVBoxLayout>
 #include <QString>
 
 #include <cstdlib>
+#include <algorithm>
 #include <filesystem>
 
 
@@ -145,9 +149,18 @@ void apply_download_toggle_style(QToolButton* button)
 
 
 LLMSelectionDialog::LLMSelectionDialog(Settings& settings, QWidget* parent)
+    : LLMSelectionDialog(settings, std::shared_ptr<CodexRuntimeService>{}, parent)
+{
+}
+
+LLMSelectionDialog::LLMSelectionDialog(Settings& settings,
+                                       std::shared_ptr<CodexRuntimeService> codex_runtime,
+                                       QWidget* parent)
     : QDialog(parent)
     , settings(settings)
+    , codex_runtime_(std::move(codex_runtime))
     , selected_visual_model_id_(settings.get_visual_model_id())
+    , chatgpt_model_(settings.get_chatgpt_model())
     , downloads_expanded_(settings.get_llm_downloads_expanded())
     , model_storage_dir_(settings.get_llm_storage_dir())
     , original_model_storage_dir_(settings.get_llm_storage_dir())
@@ -191,6 +204,9 @@ LLMSelectionDialog::LLMSelectionDialog(Settings& settings, QWidget* parent)
     selected_custom_id = settings.get_active_custom_llm_id();
     selected_custom_api_id = settings.get_active_custom_api_id();
     switch (selected_choice) {
+    case LLMChoice::Remote_ChatGPT:
+        chatgpt_account_radio->setChecked(true);
+        break;
     case LLMChoice::Remote_OpenAI:
         openai_radio->setChecked(true);
         break;
@@ -354,6 +370,14 @@ void LLMSelectionDialog::setup_ui()
     gemini_form->addRow(gemini_link_label);
     gemini_inputs->setVisible(false);
 
+    chatgpt_account_radio = new QRadioButton(
+        tr("ChatGPT account (Codex subscription)"), radio_container);
+    chatgpt_account_radio->setStyleSheet(QStringLiteral("color: #1f6feb;"));
+    auto* chatgpt_account_desc = new QLabel(
+        tr("Use your ChatGPT account through the installed Codex app-server runtime (internet required)."),
+        radio_container);
+    chatgpt_account_desc->setWordWrap(true);
+
     openai_radio = new QRadioButton(tr("ChatGPT (OpenAI API key)"), radio_container);
     openai_radio->setStyleSheet(QStringLiteral("color: #1f6feb;"));
     auto* openai_desc = new QLabel(tr("Use your own OpenAI API key to access ChatGPT models (internet required)."), radio_container);
@@ -459,6 +483,8 @@ void LLMSelectionDialog::setup_ui()
     radio_layout->addWidget(gemini_radio);
     radio_layout->addWidget(gemini_desc);
     radio_layout->addWidget(gemini_inputs);
+    radio_layout->addWidget(chatgpt_account_radio);
+    radio_layout->addWidget(chatgpt_account_desc);
     radio_layout->addWidget(openai_radio);
     radio_layout->addWidget(openai_desc);
     radio_layout->addWidget(openai_inputs);
@@ -470,6 +496,7 @@ void LLMSelectionDialog::setup_ui()
 
     auto* llm_group = new QButtonGroup(this);
     llm_group->setExclusive(true);
+    llm_group->addButton(chatgpt_account_radio);
     llm_group->addButton(openai_radio);
     llm_group->addButton(gemini_radio);
     llm_group->addButton(custom_api_radio);
@@ -482,6 +509,55 @@ void LLMSelectionDialog::setup_ui()
     llm_group->addButton(custom_radio);
 
     layout->addWidget(radio_container);
+
+    codex_account_group_ = new QGroupBox(tr("ChatGPT account"), content);
+    auto* codex_account_layout = new QFormLayout(codex_account_group_);
+    codex_account_layout->setHorizontalSpacing(10);
+    codex_account_layout->setVerticalSpacing(6);
+
+    auto* codex_executable_row = new QWidget(codex_account_group_);
+    auto* codex_executable_layout = new QHBoxLayout(codex_executable_row);
+    codex_executable_layout->setContentsMargins(0, 0, 0, 0);
+    codex_executable_edit_ = new QLineEdit(codex_executable_row);
+    codex_executable_edit_->setText(QString::fromStdString(settings.get_codex_executable_path()));
+    codex_executable_edit_->setPlaceholderText(tr("Path to codex executable"));
+    browse_codex_executable_button_ = new QPushButton(tr("Browse…"), codex_executable_row);
+    codex_executable_layout->addWidget(codex_executable_edit_, 1);
+    codex_executable_layout->addWidget(browse_codex_executable_button_);
+    codex_account_layout->addRow(tr("Codex executable"), codex_executable_row);
+
+    codex_runtime_status_label_ = new QLabel(codex_account_group_);
+    codex_runtime_status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    codex_account_layout->addRow(tr("Runtime"), codex_runtime_status_label_);
+
+    codex_account_status_label_ = new QLabel(codex_account_group_);
+    codex_account_status_label_->setWordWrap(true);
+    codex_account_status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    codex_account_layout->addRow(tr("Account"), codex_account_status_label_);
+
+    auto* codex_account_actions = new QWidget(codex_account_group_);
+    auto* codex_account_actions_layout = new QHBoxLayout(codex_account_actions);
+    codex_account_actions_layout->setContentsMargins(0, 0, 0, 0);
+    codex_sign_in_button_ = new QPushButton(tr("Sign in with ChatGPT"), codex_account_actions);
+    codex_sign_out_button_ = new QPushButton(tr("Sign out"), codex_account_actions);
+    codex_device_login_button_ = new QPushButton(tr("Use device-code sign-in"), codex_account_actions);
+    codex_account_actions_layout->addWidget(codex_sign_in_button_);
+    codex_account_actions_layout->addWidget(codex_sign_out_button_);
+    codex_account_actions_layout->addWidget(codex_device_login_button_);
+    codex_account_actions_layout->addStretch(1);
+    codex_account_layout->addRow(QString(), codex_account_actions);
+
+    codex_model_combo_ = new QComboBox(codex_account_group_);
+    codex_model_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    codex_model_combo_->setMinimumContentsLength(18);
+    codex_account_layout->addRow(tr("Codex model"), codex_model_combo_);
+
+    codex_model_status_label_ = new QLabel(codex_account_group_);
+    codex_model_status_label_->setWordWrap(true);
+    codex_model_status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    codex_account_layout->addRow(QString(), codex_model_status_label_);
+    codex_account_group_->setVisible(false);
+    layout->addWidget(codex_account_group_);
 
     download_toggle_button = new QToolButton(this);
     download_toggle_button->setText(tr("Downloads"));
@@ -626,6 +702,7 @@ void LLMSelectionDialog::setup_ui()
 void LLMSelectionDialog::connect_signals()
 {
     auto update_handler = [this]() { update_ui_for_choice(); };
+    connect(chatgpt_account_radio, &QRadioButton::toggled, this, update_handler);
     connect(openai_radio, &QRadioButton::toggled, this, update_handler);
     connect(gemini_radio, &QRadioButton::toggled, this, update_handler);
     connect(custom_api_radio, &QRadioButton::toggled, this, update_handler);
@@ -641,6 +718,52 @@ void LLMSelectionDialog::connect_signals()
     connect(openai_model_edit, &QLineEdit::textChanged, this, update_handler);
     connect(gemini_api_key_edit, &QLineEdit::textChanged, this, update_handler);
     connect(gemini_model_edit, &QLineEdit::textChanged, this, update_handler);
+    connect(codex_executable_edit_, &QLineEdit::textChanged, this, [this](const QString&) {
+        update_codex_controls();
+    });
+    connect(codex_executable_edit_, &QLineEdit::editingFinished, this,
+            &LLMSelectionDialog::apply_codex_executable_path);
+    connect(codex_model_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (!codex_model_combo_ || index < 0) {
+            return;
+        }
+        chatgpt_model_ = codex_model_combo_->itemData(index).toString().toStdString();
+        update_ui_for_choice();
+    });
+    connect(browse_codex_executable_button_,
+            &QPushButton::clicked,
+            this,
+            &LLMSelectionDialog::browse_codex_executable);
+    connect(codex_sign_in_button_, &QPushButton::clicked, this, &LLMSelectionDialog::begin_codex_login);
+    connect(codex_sign_out_button_, &QPushButton::clicked, this, &LLMSelectionDialog::logout_codex);
+    connect(codex_device_login_button_,
+            &QPushButton::clicked,
+            this,
+            &LLMSelectionDialog::begin_codex_device_login);
+    if (codex_runtime_) {
+        connect(codex_runtime_.get(), &CodexRuntimeService::stateChanged, this, [this]() {
+            update_codex_controls();
+            update_chatgpt_acceptance_state();
+            refresh_visual_backend_combo();
+        });
+        connect(codex_runtime_.get(),
+                &CodexRuntimeService::loginUrlReady,
+                this,
+                [](const QUrl& url) { QDesktopServices::openUrl(url); });
+        connect(codex_runtime_.get(),
+                &CodexRuntimeService::deviceCodeReady,
+                this,
+                [this](const QUrl& verification_url, const QString& user_code) {
+                    if (!verification_url.isEmpty()) {
+                        QDesktopServices::openUrl(verification_url);
+                    }
+                    if (codex_account_status_label_) {
+                        codex_account_status_label_->setText(
+                            tr("Enter device code %1 in the browser to finish signing in.")
+                                .arg(user_code));
+                    }
+                });
+    }
     connect(add_custom_button, &QPushButton::clicked, this, &LLMSelectionDialog::handle_add_custom);
     connect(edit_custom_button, &QPushButton::clicked, this, &LLMSelectionDialog::handle_edit_custom);
     connect(delete_custom_button, &QPushButton::clicked, this, &LLMSelectionDialog::handle_delete_custom);
@@ -713,6 +836,7 @@ void LLMSelectionDialog::connect_signals()
             selected_visual_model_id_ = visual_backend_combo->itemData(index).toString().toStdString();
             update_visual_backend_selection();
             update_visual_llm_downloads();
+            update_ui_for_choice();
             adjust_dialog_size();
         });
     }
@@ -739,6 +863,11 @@ void LLMSelectionDialog::showEvent(QShowEvent* event)
 
 void LLMSelectionDialog::accept()
 {
+    update_radio_selection();
+    update_chatgpt_acceptance_state();
+    if (ok_button && !ok_button->isEnabled()) {
+        return;
+    }
     accepted_ = true;
     QDialog::accept();
 }
@@ -756,6 +885,17 @@ std::string LLMSelectionDialog::get_selected_custom_llm_id() const
 std::string LLMSelectionDialog::get_selected_custom_api_id() const
 {
     return selected_custom_api_id;
+}
+
+std::string LLMSelectionDialog::get_codex_executable_path() const
+{
+    return codex_executable_edit_ ? codex_executable_edit_->text().trimmed().toStdString()
+                                  : settings.get_codex_executable_path();
+}
+
+std::string LLMSelectionDialog::get_chatgpt_model() const
+{
+    return chatgpt_model_;
 }
 
 std::string LLMSelectionDialog::get_openai_api_key() const
@@ -790,6 +930,9 @@ std::string LLMSelectionDialog::get_llm_storage_dir() const
 
 std::string LLMSelectionDialog::get_selected_visual_model_id() const
 {
+    if (selected_visual_model_id_ == kChatGptVisualBackendId) {
+        return selected_visual_model_id_;
+    }
     if (is_custom_visual_model_id(selected_visual_model_id_)) {
         return selected_visual_model_id_;
     }
@@ -797,6 +940,272 @@ std::string LLMSelectionDialog::get_selected_visual_model_id() const
         return std::string(descriptor->id);
     }
     return std::string();
+}
+
+CodexRuntimeSnapshot LLMSelectionDialog::current_codex_snapshot() const
+{
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    if (codex_runtime_snapshot_override_.has_value()) {
+        return *codex_runtime_snapshot_override_;
+    }
+#endif
+    return codex_runtime_ ? codex_runtime_->snapshot() : CodexRuntimeSnapshot{};
+}
+
+bool LLMSelectionDialog::chatgpt_controls_needed() const
+{
+    return selected_choice == LLMChoice::Remote_ChatGPT
+        || selected_visual_model_id_ == kChatGptVisualBackendId;
+}
+
+void LLMSelectionDialog::refresh_codex_model_combo()
+{
+    if (!codex_model_combo_) {
+        return;
+    }
+
+    const auto snapshot = current_codex_snapshot();
+    codex_model_combo_->blockSignals(true);
+    codex_model_combo_->clear();
+    codex_model_combo_->addItem(tr("Auto (Codex default)"), QString());
+    for (const auto& model : snapshot.models) {
+        const QString label = model.display_name.empty()
+            ? QString::fromStdString(model.id)
+            : QString::fromStdString(model.display_name);
+        codex_model_combo_->addItem(label, QString::fromStdString(model.id));
+    }
+
+    int selected_index = 0;
+    if (!chatgpt_model_.empty()) {
+        const int configured_index = codex_model_combo_->findData(QString::fromStdString(chatgpt_model_));
+        if (configured_index >= 0) {
+            selected_index = configured_index;
+        } else if (!snapshot.models.empty()) {
+            chatgpt_model_.clear();
+        }
+    }
+    codex_model_combo_->setCurrentIndex(selected_index);
+    codex_model_combo_->blockSignals(false);
+}
+
+LLMSelectionVisualBackendModel::ChatGptVisualOption LLMSelectionDialog::chatgpt_visual_option() const
+{
+    LLMSelectionVisualBackendModel::ChatGptVisualOption option;
+    option.visible = static_cast<bool>(codex_runtime_);
+    if (!codex_runtime_) {
+        return option;
+    }
+
+    const auto snapshot = current_codex_snapshot();
+    if (!snapshot.runtime_found) {
+        option.unavailable_reason = tr("Codex runtime not found. Set the executable path.");
+        return option;
+    }
+    if (!snapshot.running) {
+        option.unavailable_reason = tr("Codex runtime is not ready. Start Codex and try again.");
+        return option;
+    }
+    if (!snapshot.authenticated) {
+        option.unavailable_reason = tr("Sign in with ChatGPT first.");
+        return option;
+    }
+
+    const CodexModelInfo* selected_model = nullptr;
+    if (chatgpt_model_.empty()) {
+        for (const auto& model : snapshot.models) {
+            if (model.is_default) {
+                selected_model = &model;
+                break;
+            }
+        }
+        if (!selected_model) {
+            option.unavailable_reason = tr(
+                "Codex did not report a default model. Select an image-capable model explicitly.");
+            return option;
+        }
+    } else {
+        for (const auto& model : snapshot.models) {
+            if (model.id == chatgpt_model_) {
+                selected_model = &model;
+                break;
+            }
+        }
+    }
+
+    if (!selected_model) {
+        option.unavailable_reason = tr("No selected Codex model is available.");
+        return option;
+    }
+    if (!selected_model->accepts_image) {
+        option.unavailable_reason = tr(
+            "Selected model does not support image analysis. Choose an image-capable model or a local visual backend.");
+        return option;
+    }
+
+    option.enabled = true;
+    return option;
+}
+
+bool LLMSelectionDialog::chatgpt_text_selection_valid(QString* reason) const
+{
+    if (selected_choice != LLMChoice::Remote_ChatGPT) {
+        return true;
+    }
+
+    const auto snapshot = current_codex_snapshot();
+    if (!snapshot.runtime_found) {
+        if (reason) *reason = tr("Codex runtime not found. Set the executable path.");
+        return false;
+    }
+    if (!snapshot.running) {
+        if (reason) *reason = tr("Codex runtime is not ready. Start Codex and try again.");
+        return false;
+    }
+    if (!snapshot.authenticated) {
+        if (reason) *reason = tr("Sign in with ChatGPT first.");
+        return false;
+    }
+    if (snapshot.models.empty()) {
+        if (reason) *reason = tr("No Codex models are available. Refresh the account and try again.");
+        return false;
+    }
+    if (!chatgpt_model_.empty()) {
+        const auto found = std::find_if(snapshot.models.begin(), snapshot.models.end(), [this](const auto& model) {
+            return model.id == chatgpt_model_;
+        });
+        if (found == snapshot.models.end()) {
+            if (reason) *reason = tr("Selected Codex model is no longer available. Choose another model.");
+            return false;
+        }
+    }
+    return true;
+}
+
+void LLMSelectionDialog::update_codex_controls()
+{
+    if (!codex_account_group_) {
+        return;
+    }
+
+    const bool show_controls = static_cast<bool>(codex_runtime_) && chatgpt_controls_needed();
+    codex_account_group_->setVisible(show_controls);
+    if (!codex_runtime_) {
+        return;
+    }
+
+    const auto snapshot = current_codex_snapshot();
+    if (!snapshot.runtime_found) {
+        codex_runtime_status_label_->setText(tr("Codex runtime not found. Browse to the executable."));
+    } else if (!snapshot.running) {
+        codex_runtime_status_label_->setText(tr("Codex runtime is starting…"));
+    } else if (!snapshot.runtime_version.empty()) {
+        codex_runtime_status_label_->setText(
+            tr("Codex runtime %1").arg(QString::fromStdString(snapshot.runtime_version)));
+    } else {
+        codex_runtime_status_label_->setText(tr("Codex runtime connected."));
+    }
+
+    if (!snapshot.authenticated) {
+        codex_account_status_label_->setText(tr("Not signed in. Sign in with ChatGPT to use subscription models."));
+    } else {
+        QString account = tr("Signed in");
+        if (!snapshot.account.email.empty()) {
+            account += QStringLiteral(": %1").arg(QString::fromStdString(snapshot.account.email));
+        }
+        if (!snapshot.account.plan_type.empty()) {
+            account += QStringLiteral(" (%1)").arg(QString::fromStdString(snapshot.account.plan_type));
+        }
+        codex_account_status_label_->setText(account);
+    }
+
+    refresh_codex_model_combo();
+    const auto visual_option = chatgpt_visual_option();
+    if (visual_option.enabled) {
+        codex_model_status_label_->setText(tr("Selected model supports image analysis."));
+    } else if (!visual_option.unavailable_reason.isEmpty()) {
+        codex_model_status_label_->setText(visual_option.unavailable_reason);
+    } else {
+        codex_model_status_label_->clear();
+    }
+
+    codex_sign_in_button_->setEnabled(snapshot.runtime_found && snapshot.running && !snapshot.authenticated);
+    codex_sign_out_button_->setEnabled(snapshot.authenticated);
+    codex_device_login_button_->setEnabled(snapshot.runtime_found && snapshot.running && !snapshot.authenticated);
+    codex_model_combo_->setEnabled(snapshot.authenticated && !snapshot.models.empty());
+}
+
+void LLMSelectionDialog::update_chatgpt_acceptance_state()
+{
+    if (!ok_button) {
+        return;
+    }
+
+    QString reason;
+    bool valid = chatgpt_text_selection_valid(&reason);
+    if (valid && selected_visual_model_id_ == kChatGptVisualBackendId) {
+        const auto option = chatgpt_visual_option();
+        valid = option.visible && option.enabled;
+        if (!valid) {
+            reason = option.unavailable_reason;
+        }
+    }
+
+    if (!valid) {
+        ok_button->setEnabled(false);
+        if (codex_model_status_label_ && !reason.isEmpty()) {
+            codex_model_status_label_->setText(reason);
+        }
+        if (chatgpt_controls_needed() && !reason.isEmpty()) {
+            set_status_message(reason);
+        }
+    } else if (selected_choice == LLMChoice::Remote_ChatGPT) {
+        ok_button->setEnabled(true);
+    }
+}
+
+void LLMSelectionDialog::browse_codex_executable()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Select Codex executable"), codex_executable_edit_->text());
+    if (!path.isEmpty()) {
+        codex_executable_edit_->setText(path);
+        apply_codex_executable_path();
+    }
+}
+
+void LLMSelectionDialog::apply_codex_executable_path()
+{
+    if (!codex_runtime_) {
+        return;
+    }
+    codex_runtime_->configure_executable_path_async(get_codex_executable_path());
+    codex_runtime_->start_or_refresh_async();
+}
+
+void LLMSelectionDialog::begin_codex_login()
+{
+    if (!codex_runtime_) {
+        return;
+    }
+    codex_account_status_label_->setText(tr("Opening ChatGPT sign-in…"));
+    codex_runtime_->begin_chatgpt_login_async();
+}
+
+void LLMSelectionDialog::begin_codex_device_login()
+{
+    if (!codex_runtime_) {
+        return;
+    }
+    codex_account_status_label_->setText(tr("Preparing device-code sign-in…"));
+    codex_runtime_->begin_device_code_login_async();
+}
+
+void LLMSelectionDialog::logout_codex()
+{
+    if (!codex_runtime_) {
+        return;
+    }
+    codex_runtime_->logout_async();
 }
 
 
@@ -840,15 +1249,19 @@ void LLMSelectionDialog::update_ui_for_choice()
         || selected_choice == LLMChoice::Local_7b_Gemma);
 
     if (selected_choice == LLMChoice::Custom || is_remote_choice(selected_choice) || !is_local_builtin) {
+        update_chatgpt_acceptance_state();
         return;
     }
 
     update_local_choice_ui();
+    update_chatgpt_acceptance_state();
 }
 
 void LLMSelectionDialog::update_radio_selection()
 {
-    if (openai_radio->isChecked()) {
+    if (chatgpt_account_radio->isChecked()) {
+        selected_choice = LLMChoice::Remote_ChatGPT;
+    } else if (openai_radio->isChecked()) {
         selected_choice = LLMChoice::Remote_OpenAI;
     } else if (gemini_radio->isChecked()) {
         selected_choice = LLMChoice::Remote_Gemini;
@@ -878,9 +1291,10 @@ void LLMSelectionDialog::update_custom_choice_ui()
         || selected_choice == LLMChoice::Local_7b_Gemma);
     const bool is_remote_openai = selected_choice == LLMChoice::Remote_OpenAI;
     const bool is_remote_gemini = selected_choice == LLMChoice::Remote_Gemini;
+    const bool is_remote_chatgpt = selected_choice == LLMChoice::Remote_ChatGPT;
     const bool is_remote_custom = selected_choice == LLMChoice::Remote_Custom;
     const bool is_custom = selected_choice == LLMChoice::Custom;
-    const bool show_model_sections = is_local_builtin || is_custom;
+    const bool show_model_sections = is_local_builtin || is_custom || chatgpt_controls_needed();
     if (download_toggle_button) {
         download_toggle_button->setVisible(show_model_sections);
     }
@@ -902,6 +1316,7 @@ void LLMSelectionDialog::update_custom_choice_ui()
         gemini_inputs->setVisible(is_remote_gemini);
         gemini_inputs->setEnabled(is_remote_gemini);
     }
+    update_codex_controls();
 
     custom_combo->setEnabled(is_custom);
     edit_custom_button->setEnabled(is_custom && custom_combo->currentIndex() >= 0 && custom_combo->count() > 0);
@@ -930,6 +1345,15 @@ void LLMSelectionDialog::update_custom_choice_ui()
     }
     if (is_remote_gemini) {
         update_gemini_fields_state();
+        return;
+    }
+    if (is_remote_chatgpt) {
+        if (ok_button) {
+            ok_button->setEnabled(true);
+        }
+        progress_bar->setVisible(false);
+        download_button->setVisible(false);
+        set_status_message(tr("ChatGPT will use your signed-in Codex subscription."));
         return;
     }
 
@@ -1522,7 +1946,8 @@ void LLMSelectionDialog::refresh_visual_backend_combo()
     const auto items = LLMSelectionVisualBackendModel::build_visual_backend_items(
         settings.get_custom_llms(),
         tr("Recommended"),
-        tr("Custom: %1"));
+        tr("Custom: %1"),
+        chatgpt_visual_option());
     const std::string target_id =
         LLMSelectionVisualBackendModel::choose_visual_backend_id(previous_id, items);
 
@@ -1531,6 +1956,13 @@ void LLMSelectionDialog::refresh_visual_backend_combo()
 
     for (const auto& item : items) {
         visual_backend_combo->addItem(item.label, QString::fromStdString(item.id));
+        const int index = visual_backend_combo->count() - 1;
+        if (auto* item_model = qobject_cast<QStandardItemModel*>(visual_backend_combo->model())) {
+            if (auto* model_item = item_model->item(index)) {
+                model_item->setEnabled(item.enabled);
+                model_item->setToolTip(item.unavailable_reason);
+            }
+        }
     }
 
     const int target_index = LLMSelectionVisualBackendModel::index_of_visual_backend_id(items, target_id);
@@ -2347,6 +2779,76 @@ void LLMSelectionDialogTestAccess::set_network_available_override(LLMSelectionDi
     } else {
         dialog.use_network_available_override_ = false;
     }
+}
+
+LLMSelectionDialogTestAccess::CodexControlRefs LLMSelectionDialogTestAccess::codex_controls(
+    LLMSelectionDialog& dialog)
+{
+    return {
+        dialog.chatgpt_account_radio,
+        dialog.codex_account_group_,
+        dialog.codex_executable_edit_,
+        dialog.codex_runtime_status_label_,
+        dialog.codex_account_status_label_,
+        dialog.codex_model_status_label_,
+        dialog.codex_model_combo_,
+        dialog.codex_sign_in_button_,
+        dialog.codex_sign_out_button_,
+        dialog.codex_device_login_button_,
+        dialog.openai_inputs,
+    };
+}
+
+void LLMSelectionDialogTestAccess::refresh_codex_controls(LLMSelectionDialog& dialog)
+{
+    dialog.update_codex_controls();
+    dialog.refresh_visual_backend_combo();
+    dialog.update_chatgpt_acceptance_state();
+}
+
+void LLMSelectionDialogTestAccess::apply_codex_executable_path(LLMSelectionDialog& dialog)
+{
+    dialog.apply_codex_executable_path();
+}
+
+void LLMSelectionDialogTestAccess::set_codex_runtime_snapshot_override(
+    LLMSelectionDialog& dialog,
+    std::optional<CodexRuntimeSnapshot> snapshot)
+{
+    dialog.codex_runtime_snapshot_override_ = std::move(snapshot);
+}
+
+bool LLMSelectionDialogTestAccess::visual_backend_enabled(const LLMSelectionDialog& dialog,
+                                                          const std::string& backend_id)
+{
+    if (!dialog.visual_backend_combo) {
+        return false;
+    }
+    const int index = dialog.visual_backend_combo->findData(QString::fromStdString(backend_id));
+    if (index < 0 || !dialog.visual_backend_combo->model()) {
+        return false;
+    }
+    return dialog.visual_backend_combo->model()->flags(dialog.visual_backend_combo->model()->index(index, 0))
+        .testFlag(Qt::ItemIsEnabled);
+}
+
+std::string LLMSelectionDialogTestAccess::visual_backend_unavailable_reason(
+    const LLMSelectionDialog& dialog,
+    const std::string& backend_id)
+{
+    if (!dialog.visual_backend_combo) {
+        return {};
+    }
+    const int index = dialog.visual_backend_combo->findData(QString::fromStdString(backend_id));
+    if (index < 0) {
+        return {};
+    }
+    return dialog.visual_backend_combo->itemData(index, Qt::ToolTipRole).toString().toStdString();
+}
+
+void LLMSelectionDialogTestAccess::accept_dialog(LLMSelectionDialog& dialog)
+{
+    dialog.accept();
 }
 
 #endif // AI_FILE_SORTER_TEST_BUILD

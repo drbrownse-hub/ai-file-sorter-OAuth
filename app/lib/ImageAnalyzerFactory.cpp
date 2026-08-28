@@ -18,6 +18,14 @@
 
 namespace {
 
+#ifdef AI_FILE_SORTER_TEST_BUILD
+ImageAnalyzerFactory::TestCreateProbe& test_create_probe_slot()
+{
+    static ImageAnalyzerFactory::TestCreateProbe probe;
+    return probe;
+}
+#endif
+
 std::filesystem::path require_artifact_path(const VisualLlmRuntime::Backend& backend,
                                             VisualModelArtifactKind kind,
                                             const char* label)
@@ -196,6 +204,12 @@ void run_visual_gpu_preflight(const VisualLlmRuntime::Backend& backend)
 std::unique_ptr<ImageAnalyzer> ImageAnalyzerFactory::create(const VisualLlmRuntime::Backend& backend,
                                                             ImageAnalyzerSettings settings)
 {
+#ifdef AI_FILE_SORTER_TEST_BUILD
+    if (auto& probe = test_create_probe_slot(); probe) {
+        return probe(backend, settings);
+    }
+#endif
+
     if (!backend.descriptor) {
         throw std::runtime_error("Visual backend descriptor is missing.");
     }
@@ -226,3 +240,15 @@ std::unique_ptr<ImageAnalyzer> ImageAnalyzerFactory::create(const VisualLlmRunti
 
     throw std::runtime_error("Unsupported visual model architecture.");
 }
+
+#ifdef AI_FILE_SORTER_TEST_BUILD
+void ImageAnalyzerFactory::set_test_create_probe(TestCreateProbe probe)
+{
+    test_create_probe_slot() = std::move(probe);
+}
+
+void ImageAnalyzerFactory::reset_test_create_probe()
+{
+    test_create_probe_slot() = TestCreateProbe{};
+}
+#endif

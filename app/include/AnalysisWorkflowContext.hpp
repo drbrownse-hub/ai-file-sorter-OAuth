@@ -15,6 +15,7 @@
 class CategorizationService;
 class DatabaseManager;
 class ILLMClient;
+class ImageAnalyzer;
 class ResultsCoordinator;
 class Settings;
 namespace spdlog { class logger; }
@@ -69,4 +70,6 @@ struct AnalysisWorkflowContext {
     std::function<bool(const std::string&)> prompt_visual_cpu_fallback;
     std::function<bool(const std::string&)> prompt_continue_without_visual_analysis;
     std::function<void(const CategorizedFile&, const std::string&)> notify_recategorization_reset;
+    /** @brief Creates the remote visual analyzer when ChatGPT vision is selected. */
+    std::function<std::unique_ptr<ImageAnalyzer>()> make_remote_image_analyzer;
 };

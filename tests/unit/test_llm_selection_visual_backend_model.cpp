@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "CodexBackendIds.hpp"
 #include "LLMSelectionVisualBackendModel.hpp"
 
 TEST_CASE("LLM selection visual backend model builds built-in and visual custom items")
@@ -26,6 +27,61 @@ TEST_CASE("LLM selection visual backend model builds built-in and visual custom 
     CHECK(items[1].label == QStringLiteral("Gemma 3 4B IT (Recommended)"));
     CHECK(items.back().id == "custom:vision");
     CHECK(items.back().label == QStringLiteral("Custom: Vision Pair"));
+}
+
+TEST_CASE("LLM selection visual backend model includes explicit ChatGPT vision state")
+{
+    CustomLLM visual_custom;
+    visual_custom.id = "vision";
+    visual_custom.name = "Vision Pair";
+    visual_custom.path = "model.gguf";
+    visual_custom.mmproj_path = "mmproj.gguf";
+
+    const auto items = LLMSelectionVisualBackendModel::build_visual_backend_items(
+        {visual_custom},
+        QStringLiteral("Recommended"),
+        QStringLiteral("Custom: %1"),
+        LLMSelectionVisualBackendModel::ChatGptVisualOption{
+            true,
+            true,
+            QString()});
+
+    REQUIRE(items.size() == visual_model_descriptors().size() + 2);
+    const int chatgpt_index =
+        LLMSelectionVisualBackendModel::index_of_visual_backend_id(items, kChatGptVisualBackendId);
+    REQUIRE(chatgpt_index >= 0);
+    CHECK(items[chatgpt_index].label == QStringLiteral("ChatGPT vision (subscription)"));
+    CHECK(items[chatgpt_index].enabled);
+    CHECK(items[chatgpt_index].unavailable_reason.isEmpty());
+    CHECK(LLMSelectionVisualBackendModel::index_of_visual_backend_id(items, "custom:vision") >= 0);
+
+    const auto disabled_items = LLMSelectionVisualBackendModel::build_visual_backend_items(
+        {},
+        QStringLiteral("Recommended"),
+        QStringLiteral("Custom: %1"),
+        LLMSelectionVisualBackendModel::ChatGptVisualOption{
+            true,
+            false,
+            QStringLiteral("Sign in with ChatGPT first.")});
+    const int disabled_index = LLMSelectionVisualBackendModel::index_of_visual_backend_id(
+        disabled_items,
+        kChatGptVisualBackendId);
+    REQUIRE(disabled_index >= 0);
+    CHECK_FALSE(disabled_items[disabled_index].enabled);
+    CHECK(disabled_items[disabled_index].unavailable_reason ==
+          QStringLiteral("Sign in with ChatGPT first."));
+
+    const auto hidden_items = LLMSelectionVisualBackendModel::build_visual_backend_items(
+        {},
+        QStringLiteral("Recommended"),
+        QStringLiteral("Custom: %1"),
+        LLMSelectionVisualBackendModel::ChatGptVisualOption{
+            false,
+            true,
+            QString()});
+    CHECK(LLMSelectionVisualBackendModel::index_of_visual_backend_id(
+              hidden_items,
+              kChatGptVisualBackendId) == -1);
 }
 
 TEST_CASE("LLM selection visual backend model chooses requested default and fallback ids")
@@ -59,4 +115,26 @@ TEST_CASE("LLM selection visual backend model resolves canonical descriptors")
     CHECK(std::string(fallback_descriptor->id) == "gemma-3-4b-it");
     CHECK(LLMSelectionVisualBackendModel::canonical_visual_backend_id("missing")
           == "gemma-3-4b-it");
+
+    CHECK(LLMSelectionVisualBackendModel::selected_visual_model_descriptor(kChatGptVisualBackendId)
+          == nullptr);
+    CHECK(LLMSelectionVisualBackendModel::canonical_visual_backend_id(kChatGptVisualBackendId)
+          == kChatGptVisualBackendId);
+}
+
+TEST_CASE("LLM selection visual backend model preserves a selected ChatGPT item")
+{
+    const auto items = LLMSelectionVisualBackendModel::build_visual_backend_items(
+        {},
+        QStringLiteral("Recommended"),
+        QStringLiteral("Custom: %1"),
+        LLMSelectionVisualBackendModel::ChatGptVisualOption{
+            true,
+            true,
+            QString()});
+
+    CHECK(LLMSelectionVisualBackendModel::choose_visual_backend_id(
+              kChatGptVisualBackendId,
+              items)
+          == kChatGptVisualBackendId);
 }

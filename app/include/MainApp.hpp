@@ -68,6 +68,7 @@ class WhitelistManagerDialog;
 class SuitabilityBenchmarkDialog;
 struct AnalysisWorkflowContext;
 class StoragePluginManager;
+class CodexRuntimeService;
 
 struct CategorizedFile;
 struct FileEntry;
@@ -227,6 +228,7 @@ private:
     void set_app_icon();
 
     void load_settings();
+    void configure_codex_runtime();
     void save_settings();
     void sync_settings_to_ui();
     void sync_ui_to_settings();
@@ -584,6 +586,7 @@ private:
     ExplorerExtensionManager explorer_extension_manager_;
     CategorizationService categorization_service;
     ConsistencyPassService consistency_pass_service;
+    std::shared_ptr<CodexRuntimeService> codex_runtime_;
     StorageProviderRegistry storage_provider_registry_;
     std::shared_ptr<IStorageProvider> active_storage_provider_;
     ResultsCoordinator results_coordinator;
@@ -631,6 +634,8 @@ private:
     std::function<bool()> image_analysis_prompt_override_;
     std::function<bool()> visual_cpu_fallback_prompt_override_;
     std::function<bool()> continue_without_visual_analysis_prompt_override_;
+    std::function<std::unique_ptr<ILLMClient>(const std::string&)>
+        local_llm_client_factory_override_;
 #endif
 };
 

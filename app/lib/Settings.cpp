@@ -1,4 +1,5 @@
 #include "Settings.hpp"
+#include "CodexBackendIds.hpp"
 #include "Types.hpp"
 #include "Logger.hpp"
 #include "Language.hpp"
@@ -306,6 +307,7 @@ std::string llm_choice_to_string(LLMChoice choice) {
     switch (choice) {
         case LLMChoice::Remote_OpenAI: return "Remote_OpenAI";
         case LLMChoice::Remote_Gemini: return "Remote_Gemini";
+        case LLMChoice::Remote_ChatGPT: return "Remote_ChatGPT";
         case LLMChoice::Remote_Custom: return "Remote_Custom";
         case LLMChoice::Local_4b_Gemma: return "Local_4b_Gemma";
         case LLMChoice::Local_3b_legacy: return "Local_3b_legacy";
@@ -351,6 +353,9 @@ std::string normalize_visual_model_id(const std::string& value)
     const auto trimmed = trim_copy(value);
     if (trimmed.empty()) {
         return default_visual_model_descriptor().id;
+    }
+    if (trimmed == kChatGptVisualBackendId) {
+        return trimmed;
     }
     if (is_custom_visual_model_id(trimmed)) {
         return trimmed;
@@ -480,6 +485,7 @@ LLMChoice Settings::parse_llm_choice() const
     const std::string value = config.getValue("Settings", "LLMChoice", "Unset");
     if (value == "Remote" || value == "Remote_OpenAI") return LLMChoice::Remote_OpenAI;
     if (value == "Remote_Gemini") return LLMChoice::Remote_Gemini;
+    if (value == "Remote_ChatGPT") return LLMChoice::Remote_ChatGPT;
     if (value == "Remote_Custom") return LLMChoice::Remote_Custom;
     if (value == "Local_3b" || value == "Local_4b_Gemma") return LLMChoice::Local_4b_Gemma;
     if (value == "Local_3b_legacy") return LLMChoice::Local_3b_legacy;
@@ -495,6 +501,8 @@ void Settings::load_basic_settings(const std::function<bool(const char*, bool)>&
     llm_choice = parse_llm_choice();
     set_openai_api_key(config.getValue("Settings", "RemoteApiKey", ""));
     set_openai_model(config.getValue("Settings", "RemoteModel", "gpt-4o-mini"));
+    set_codex_executable_path(config.getValue("Settings", "CodexExecutablePath", ""));
+    set_chatgpt_model(config.getValue("Settings", "ChatGptModel", ""));
     set_gemini_api_key(config.getValue("Settings", "GeminiApiKey", ""));
     set_gemini_model(config.getValue("Settings", "GeminiModel", "gemini-2.5-flash-lite"));
     set_remote_requests_per_minute(load_int("RemoteRequestsPerMinute", 0, 0));
@@ -657,6 +665,8 @@ void Settings::save_core_settings()
     config.setValue(settings_section, "LLMChoice", llm_choice_to_string(llm_choice));
     config.setValue(settings_section, "RemoteApiKey", openai_api_key);
     config.setValue(settings_section, "RemoteModel", openai_model.empty() ? "gpt-4o-mini" : openai_model);
+    config.setValue(settings_section, "CodexExecutablePath", codex_executable_path);
+    config.setValue(settings_section, "ChatGptModel", chatgpt_model);
     config.setValue(settings_section, "GeminiApiKey", gemini_api_key);
     config.setValue(settings_section, "GeminiModel", gemini_model.empty() ? "gemini-2.5-flash-lite" : gemini_model);
     config.setValue(settings_section, "RemoteRequestsPerMinute", std::to_string(remote_requests_per_minute));
@@ -890,6 +900,26 @@ void Settings::set_openai_model(const std::string& model)
         trimmed = "gpt-4o-mini";
     }
     openai_model = trimmed;
+}
+
+std::string Settings::get_codex_executable_path() const
+{
+    return codex_executable_path;
+}
+
+void Settings::set_codex_executable_path(const std::string& path)
+{
+    codex_executable_path = trim_copy(path);
+}
+
+std::string Settings::get_chatgpt_model() const
+{
+    return chatgpt_model;
+}
+
+void Settings::set_chatgpt_model(const std::string& model)
+{
+    chatgpt_model = trim_copy(model);
 }
 
 std::string Settings::get_gemini_api_key() const

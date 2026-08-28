@@ -660,7 +660,7 @@ list(REMOVE_ITEM APP_LIB_SOURCES ${AIFS_TEST_ONLY_APP_SOURCES})
 file(GLOB APP_HEADER_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
 )
-set(APP_SOURCES ${APP_MAIN_SOURCE} ${APP_LIB_SOURCES})
+set(APP_SOURCES ${APP_MAIN_SOURCE} ${APP_LIB_SOURCES} ${APP_HEADER_SOURCES})
 set(AIFS_TRANSLATION_TS_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/i18n/aifilesorter_fr.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/i18n/aifilesorter_de.ts"
@@ -689,6 +689,7 @@ if(WIN32)
 else()
     add_executable(aifilesorter ${APP_SOURCES})
 endif()
+set_target_properties(aifilesorter PROPERTIES AUTOMOC ON)
 
 aifs_apply_update_mode(aifilesorter)
 
@@ -1521,8 +1522,14 @@ if(AI_FILE_SORTER_BUILD_TESTS)
     )
     add_dependencies(aifilesorter aifs_onedrive_storage_plugin)
 
+    aifs_add_windows_test_executable(aifs_fake_codex_app_server
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/helpers/fake_codex_app_server.cpp"
+    )
+    target_link_libraries(aifs_fake_codex_app_server PRIVATE Qt6::Core JsonCpp::JsonCpp)
+
     aifs_add_windows_test_executable(ai_file_sorter_tests
         ${APP_LIB_SOURCES}
+        ${APP_HEADER_SOURCES}
         ${AIFS_TEST_ONLY_APP_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_utils.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_file_scanner.cpp"
@@ -1532,10 +1539,18 @@ if(AI_FILE_SORTER_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_ggml_runtime_paths.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_llm_downloader.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_custom_llm.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_chatgpt_settings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_codex_protocol.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_codex_app_server.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_codex_runtime_service.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_codex_client.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_codex_image_analyzer.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_chatgpt_analysis_routing.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_category_date_suffix.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_app_theme.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_category_language_support.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_llm_selection_dialog_local.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_llm_selection_dialog_chatgpt.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_update_feed.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_updater.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_updater_build_modes.cpp"
@@ -1582,6 +1597,7 @@ if(AI_FILE_SORTER_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_single_instance_coordinator.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit/test_windows_cuda_probe.cpp"
     )
+    set_target_properties(ai_file_sorter_tests PROPERTIES AUTOMOC ON)
 
     aifs_add_windows_test_executable(aifs_storage_plugin_stub
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/helpers/storage_plugin_stub.cpp"
@@ -1626,11 +1642,13 @@ if(AI_FILE_SORTER_BUILD_TESTS)
         AI_FILE_SORTER_TEST_BUILD=1
         AIFS_ONEDRIVE_STORAGE_PLUGIN_NAME="$<TARGET_FILE_NAME:aifs_onedrive_storage_plugin>"
         AIFS_STORAGE_PLUGIN_STUB_NAME="$<TARGET_FILE_NAME:aifs_storage_plugin_stub>"
+        AIFS_FAKE_CODEX_APP_SERVER_PATH="$<TARGET_FILE:aifs_fake_codex_app_server>"
         WIN32_LEAN_AND_MEAN
         NOMINMAX
     )
     add_dependencies(ai_file_sorter_tests aifs_onedrive_storage_plugin)
     add_dependencies(ai_file_sorter_tests aifs_storage_plugin_stub)
+    add_dependencies(ai_file_sorter_tests aifs_fake_codex_app_server)
     aifs_apply_update_mode(ai_file_sorter_tests)
     aifs_apply_expected_update_mode(ai_file_sorter_tests "${_aifs_effective_update_mode}")
     aifs_set_windows_test_runtime_output(ai_file_sorter_tests)

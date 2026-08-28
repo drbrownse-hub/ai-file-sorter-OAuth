@@ -2,13 +2,19 @@
 
 #ifdef AI_FILE_SORTER_TEST_BUILD
 
+#include "CodexRuntimeService.hpp"
+
 #include <optional>
 #include <string>
 #include <vector>
 
+#include <QComboBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QWidget>
 class LLMDownloader;
 class LLMSelectionDialog;
 
@@ -19,6 +25,20 @@ public:
         QPushButton* download_button{nullptr};
         QProgressBar* progress_bar{nullptr};
         LLMDownloader* downloader{nullptr};
+    };
+
+    struct CodexControlRefs {
+        QRadioButton* account_radio{nullptr};
+        QWidget* account_group{nullptr};
+        QLineEdit* executable_edit{nullptr};
+        QLabel* runtime_status_label{nullptr};
+        QLabel* account_status_label{nullptr};
+        QLabel* model_status_label{nullptr};
+        QComboBox* model_combo{nullptr};
+        QPushButton* sign_in_button{nullptr};
+        QPushButton* sign_out_button{nullptr};
+        QPushButton* device_login_button{nullptr};
+        QWidget* openai_inputs{nullptr};
     };
 
     static VisualEntryRefs llava_model_entry(LLMSelectionDialog& dialog);
@@ -43,6 +63,17 @@ public:
     static std::vector<std::string> local_builtin_labels(const LLMSelectionDialog& dialog);
     static void select_visual_backend(LLMSelectionDialog& dialog, const std::string& backend_id);
     static void set_network_available_override(LLMSelectionDialog& dialog, std::optional<bool> value);
+    static CodexControlRefs codex_controls(LLMSelectionDialog& dialog);
+    static void refresh_codex_controls(LLMSelectionDialog& dialog);
+    static void apply_codex_executable_path(LLMSelectionDialog& dialog);
+    static void set_codex_runtime_snapshot_override(
+        LLMSelectionDialog& dialog,
+        std::optional<CodexRuntimeSnapshot> snapshot);
+    static bool visual_backend_enabled(const LLMSelectionDialog& dialog,
+                                       const std::string& backend_id);
+    static std::string visual_backend_unavailable_reason(const LLMSelectionDialog& dialog,
+                                                         const std::string& backend_id);
+    static void accept_dialog(LLMSelectionDialog& dialog);
 };
 
 #endif // AI_FILE_SORTER_TEST_BUILD
