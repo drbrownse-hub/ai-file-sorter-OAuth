@@ -30,12 +30,16 @@ enum class CodexErrorKind {
 
 class CodexError final : public std::runtime_error {
 public:
-    CodexError(CodexErrorKind kind, std::string message);
+    CodexError(CodexErrorKind kind,
+               std::string message,
+               std::optional<int> protocol_code = std::nullopt);
 
     CodexErrorKind kind() const noexcept;
+    std::optional<int> protocol_code() const noexcept;
 
 private:
     CodexErrorKind kind_;
+    std::optional<int> protocol_code_;
 };
 
 struct CodexAccountInfo {
@@ -109,6 +113,7 @@ Json::Value make_turn_start_params(std::string_view thread_id,
 
 CodexResponse parse_response(const Json::Value& message);
 CodexAccountInfo parse_account_read_response(const Json::Value& result);
+Json::Value parse_account_rate_limits_read_response(const Json::Value& result);
 std::vector<CodexModelInfo> parse_model_list_response(const Json::Value& result);
 std::optional<CodexAccountNotification> parse_account_notification(const Json::Value& notification);
 bool append_agent_message_delta(const Json::Value& notification,

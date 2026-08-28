@@ -86,6 +86,19 @@ TEST_CASE("CodexProtocol serializes only text and data URL image inputs")
     CHECK_THROWS_AS(CodexProtocol::make_turn_start_params("thread-123", path_input, Json::Value()), CodexError);
 }
 
+TEST_CASE("CodexProtocol disables network access for inference turns")
+{
+    const std::vector<CodexUserInput> inputs{
+        {CodexUserInput::Kind::Text, "Classify this file."},
+    };
+
+    const Json::Value turn = CodexProtocol::make_turn_start_params("thread-123", inputs, Json::Value());
+    REQUIRE(turn["sandboxPolicy"].isObject());
+    CHECK(turn["sandboxPolicy"]["type"].asString() == "readOnly");
+    REQUIRE(turn["sandboxPolicy"]["networkAccess"].isBool());
+    CHECK_FALSE(turn["sandboxPolicy"]["networkAccess"].asBool());
+}
+
 TEST_CASE("CodexProtocol parses managed account and model capabilities")
 {
     const auto account = CodexProtocol::parse_account_read_response(parse_json(R"({
@@ -106,6 +119,23 @@ TEST_CASE("CodexProtocol parses managed account and model capabilities")
     CHECK_FALSE(models[0].accepts_image);
     CHECK(models[1].accepts_image);
     CHECK(models[1].is_default);
+}
+
+TEST_CASE("CodexProtocol parses account rate-limit read responses")
+{
+    const auto rate_limits = CodexProtocol::parse_account_rate_limits_read_response(parse_json(R"({
+      "rateLimits": {
+        "limitId":"codex",
+        "primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":1779459394},
+        "planType":"plus"
+      },
+      "rateLimitsByLimitId":{"codex":{"limitId":"codex"}}
+    })"));
+
+    CHECK(rate_limits["limitId"].asString() == "codex");
+    CHECK(rate_limits["primary"]["usedPercent"].asInt() == 25);
+    CHECK(rate_limits["primary"]["windowDurationMins"].asInt() == 300);
+    CHECK(rate_limits["planType"].asString() == "plus");
 }
 
 TEST_CASE("CodexProtocol parses responses and account notifications without OAuth tokens")

@@ -34,12 +34,19 @@ namespace {
 constexpr auto operation_timeout = std::chrono::seconds(5);
 constexpr auto probe_start_timeout = std::chrono::seconds(2);
 constexpr auto probe_finish_timeout = std::chrono::seconds(3);
+constexpr int unsupported_method_error_code = -32601;
 
 void update_snapshot(const std::shared_ptr<CodexRuntimeSharedState>& state,
                      const std::function<void(CodexRuntimeSnapshot&)>& update)
 {
     std::lock_guard lock(state->mutex);
     update(state->snapshot);
+}
+
+bool is_unsupported_method_error(const CodexError& error)
+{
+    return error.kind() == CodexErrorKind::ProtocolError &&
+           error.protocol_code() == unsupported_method_error_code;
 }
 
 std::string value_string(const Json::Value& value, const char* key)
@@ -178,6 +185,7 @@ public:
         restart_attempted_ = false;
         pending_account_refresh_ = false;
         pending_account_error_.clear();
+        rate_limits_read_supported_ = true;
         update_snapshot(state_, [](CodexRuntimeSnapshot& snapshot) {
             snapshot = {};
         });
@@ -201,6 +209,7 @@ public:
         restart_attempted_ = false;
         pending_account_refresh_ = false;
         pending_account_error_.clear();
+        rate_limits_read_supported_ = true;
         update_snapshot(state_, [](CodexRuntimeSnapshot& snapshot) {
             snapshot = {};
         });
@@ -218,6 +227,7 @@ public:
         restart_attempted_ = false;
         pending_account_refresh_ = false;
         pending_account_error_.clear();
+        rate_limits_read_supported_ = true;
         update_snapshot(state_, [](CodexRuntimeSnapshot& snapshot) { snapshot.running = false; });
         emit stateChanged();
     }
@@ -463,14 +473,34 @@ private:
             app_server_->request("account/read", Json::Value(Json::objectValue), operation_timeout);
         const CodexAccountInfo account = CodexProtocol::parse_account_read_response(account_result);
         std::vector<CodexModelInfo> models;
+        Json::Value rate_limits;
+        bool rate_limits_refreshed = false;
         if (account.authenticated) {
             const Json::Value model_result =
                 app_server_->request("model/list", Json::Value(Json::objectValue), operation_timeout);
             models = CodexProtocol::parse_model_list_response(model_result);
+            if (rate_limits_read_supported_) {
+                try {
+                    const Json::Value rate_limits_result =
+                        app_server_->request("account/rateLimits/read", Json::Value(Json::objectValue), operation_timeout);
+                    rate_limits = CodexProtocol::parse_account_rate_limits_read_response(rate_limits_result);
+                    rate_limits_refreshed = true;
+                } catch (const CodexError& error) {
+                    if (!is_unsupported_method_error(error)) {
+                        throw;
+                    }
+                    rate_limits_read_supported_ = false;
+                }
+            }
         }
-        update_snapshot(state_, [&account, &models](CodexRuntimeSnapshot& snapshot) {
+        update_snapshot(state_, [&account, &models, &rate_limits, rate_limits_refreshed](CodexRuntimeSnapshot& snapshot) {
             snapshot.account = account;
             snapshot.authenticated = account.authenticated;
+            if (!account.authenticated) {
+                snapshot.rate_limits = Json::Value();
+            } else if (rate_limits_refreshed) {
+                snapshot.rate_limits = rate_limits;
+            }
             snapshot.models = models;
             snapshot.running = true;
             snapshot.last_error.clear();
@@ -516,6 +546,10 @@ private:
             return;
         }
         if (notification->kind == CodexAccountNotificationKind::RateLimitsUpdated) {
+            update_snapshot(state_, [&notification](CodexRuntimeSnapshot& snapshot) {
+                snapshot.rate_limits = notification->rate_limits;
+            });
+            emit stateChanged();
             return;
         }
         pending_account_refresh_ = true;
@@ -610,6 +644,7 @@ private:
     bool pending_account_refresh_{false};
     std::string pending_account_error_;
     bool refresh_scheduled_{false};
+    bool rate_limits_read_supported_{true};
     bool started_once_{false};
     bool restart_attempted_{false};
     std::size_t configuration_generation_{0};

@@ -37,14 +37,19 @@ CodexTurnStatus parse_turn_status(std::string_view status)
 
 } // namespace
 
-CodexError::CodexError(CodexErrorKind kind, std::string message)
-    : std::runtime_error(std::move(message)), kind_(kind)
+CodexError::CodexError(CodexErrorKind kind, std::string message, std::optional<int> protocol_code)
+    : std::runtime_error(std::move(message)), kind_(kind), protocol_code_(protocol_code)
 {
 }
 
 CodexErrorKind CodexError::kind() const noexcept
 {
     return kind_;
+}
+
+std::optional<int> CodexError::protocol_code() const noexcept
+{
+    return protocol_code_;
 }
 
 namespace CodexProtocol {
@@ -94,6 +99,8 @@ Json::Value make_turn_start_params(std::string_view thread_id,
     Json::Value params(Json::objectValue);
     params["threadId"] = std::string(thread_id);
     params["input"] = Json::Value(Json::arrayValue);
+    params["sandboxPolicy"]["type"] = "readOnly";
+    params["sandboxPolicy"]["networkAccess"] = false;
 
     for (const CodexUserInput& input : inputs) {
         Json::Value serialized(Json::objectValue);
@@ -124,14 +131,18 @@ CodexResponse parse_response(const Json::Value& message)
     }
     if (message.isMember("error")) {
         const Json::Value& error = message["error"];
-        const int code = error["code"].isInt() ? error["code"].asInt() : 0;
+        const std::optional<int> protocol_code = error["code"].isInt()
+                                                     ? std::optional<int>(error["code"].asInt())
+                                                     : std::nullopt;
         const std::string error_message = string_member(error, "message");
-        if (code == -32001) {
+        if (protocol_code == -32001) {
             throw CodexError(CodexErrorKind::RateLimited,
-                             error_message.empty() ? "Codex server overloaded; retry later." : error_message);
+                             error_message.empty() ? "Codex server overloaded; retry later." : error_message,
+                             protocol_code);
         }
         throw CodexError(CodexErrorKind::ProtocolError,
-                         error_message.empty() ? "Codex returned a protocol error." : error_message);
+                         error_message.empty() ? "Codex returned a protocol error." : error_message,
+                         protocol_code);
     }
     if (!message.isMember("result")) {
         throw CodexError(CodexErrorKind::ProtocolError, "Codex response is missing a result.");
@@ -150,6 +161,12 @@ CodexAccountInfo parse_account_read_response(const Json::Value& result)
     account.email = string_member(raw_account, "email");
     account.plan_type = string_member(raw_account, "planType");
     return account;
+}
+
+Json::Value parse_account_rate_limits_read_response(const Json::Value& result)
+{
+    const Json::Value& rate_limits = result["rateLimits"];
+    return rate_limits.isObject() ? rate_limits : Json::Value();
 }
 
 std::vector<CodexModelInfo> parse_model_list_response(const Json::Value& result)

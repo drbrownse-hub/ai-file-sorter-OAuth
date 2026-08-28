@@ -40,6 +40,11 @@ QPushButton* MainAppTestAccess::analyze_button(MainApp& app)
     return app.analyze_button;
 }
 
+void MainAppTestAccess::start_chatgpt_runtime(MainApp& app)
+{
+    app.ensure_chatgpt_runtime_started();
+}
+
 QAction* MainAppTestAccess::clear_cache_action(MainApp& app)
 {
     return app.clear_cache_action;

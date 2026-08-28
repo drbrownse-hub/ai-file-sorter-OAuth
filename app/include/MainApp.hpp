@@ -229,6 +229,8 @@ private:
 
     void load_settings();
     void configure_codex_runtime();
+    bool chatgpt_runtime_required() const;
+    void ensure_chatgpt_runtime_started();
     void save_settings();
     void sync_settings_to_ui();
     void sync_ui_to_settings();

@@ -29,10 +29,19 @@ std::string first_line(std::string_view value)
 
 std::string display_context(std::string_view path)
 {
-    // The path is context for the existing sorter prompt, never a location for
-    // Codex to operate on. Keep only its first line and remove filesystem
-    // syntax before it enters the user input.
-    return Utils::sanitize_path_label(first_line(path));
+    // The first line is path context for the existing sorter prompt, never a
+    // location for Codex to operate on. Keep sanitizing it before it enters
+    // user input, but preserve any enriched context on following lines.
+    const std::size_t first_line_end = path.find_first_of("\r\n");
+    std::string context = Utils::sanitize_path_label(first_line(path));
+    if (first_line_end != std::string_view::npos) {
+        const std::size_t context_start = path.find_first_not_of("\r\n", first_line_end);
+        if (context_start != std::string_view::npos) {
+            context += '\n';
+            context += path.substr(context_start);
+        }
+    }
+    return context;
 }
 
 Json::Value category_output_schema()

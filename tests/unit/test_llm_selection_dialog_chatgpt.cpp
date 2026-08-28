@@ -5,6 +5,7 @@
 #include "LLMSelectionDialog.hpp"
 #include "LLMSelectionDialogTestAccess.hpp"
 #include "MainApp.hpp"
+#include "MainAppTestAccess.hpp"
 #include "Settings.hpp"
 #include "TestHelpers.hpp"
 #include "VisualModelCatalog.hpp"
@@ -16,6 +17,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QRadioButton>
+#include <QLineEdit>
 
 #include <chrono>
 #include <fstream>
@@ -326,7 +328,7 @@ TEST_CASE("Accepting ChatGPT account selection exposes settings to persist witho
     CHECK(reloaded.get_gemini_api_key().empty());
 }
 
-TEST_CASE("MainApp starts its shared Codex runtime after configuring it")
+TEST_CASE("MainApp starts its shared Codex runtime when ChatGPT is first required")
 {
     QtAppContext qt;
     TempDir config_dir;
@@ -344,7 +346,35 @@ TEST_CASE("MainApp starts its shared Codex runtime after configuring it")
     REQUIRE(settings.save());
 
     MainApp app(settings, false, true);
+    CHECK_FALSE(wait_until([&] {
+        return file_contains(event_log, "app-server-start");
+    }, std::chrono::milliseconds(500)));
+
+    MainAppTestAccess::start_chatgpt_runtime(app);
     CHECK(wait_until([&] { return file_contains(event_log, "request account/read"); }));
+}
+
+TEST_CASE("MainApp does not start Codex runtime for local-only sessions")
+{
+    QtAppContext qt;
+    TempDir config_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", config_dir.path().string());
+    EnvVarGuard scenario_guard("AIFS_FAKE_CODEX_SCENARIO", std::string("runtime-authenticated"));
+    QTemporaryDir log_dir;
+    REQUIRE(log_dir.isValid());
+    const std::string event_log = log_dir.filePath("events.log").toStdString();
+    EnvVarGuard event_log_guard("AIFS_FAKE_CODEX_EVENT_LOG", event_log);
+
+    Settings settings;
+    settings.load();
+    settings.set_llm_choice(LLMChoice::Local_4b_Gemma);
+    settings.set_codex_executable_path(AIFS_FAKE_CODEX_APP_SERVER_PATH);
+    REQUIRE(settings.save());
+
+    MainApp app(settings, false, true);
+    CHECK_FALSE(wait_until([&] {
+        return file_contains(event_log, "app-server-start");
+    }, std::chrono::milliseconds(500)));
 }
 
 TEST_CASE("Browsing to a Codex executable starts the existing shared runtime")

@@ -148,6 +148,49 @@ TEST_CASE("CodexClient does not send actionable absolute source path")
     CHECK(events.find("paper.pdf") != std::string::npos);
 }
 
+TEST_CASE("CodexClient preserves enriched categorization context without sending absolute source path")
+{
+    SECTION("document summary")
+    {
+        FakeRuntimeEnvironment environment("client-category");
+        QTemporaryDir temp;
+        auto runtime = authenticated_runtime(temp);
+        CodexClient client(runtime, "");
+        const std::string source_path = "/private/source/quarterly_report.pdf";
+        const std::string summary =
+            "Document summary: Quarterly revenue report for the European sales region.";
+
+        static_cast<void>(client.categorize_file("quarterly_report.pdf",
+                                                 source_path + "\n" + summary,
+                                                 FileType::File,
+                                                 ""));
+
+        const std::string events = environment.event_log();
+        CHECK(events.find(summary) != std::string::npos);
+        CHECK(events.find(source_path) == std::string::npos);
+    }
+
+    SECTION("image description")
+    {
+        FakeRuntimeEnvironment environment("client-category");
+        QTemporaryDir temp;
+        auto runtime = authenticated_runtime(temp);
+        CodexClient client(runtime, "");
+        const std::string source_path = "/private/source/dashboard.png";
+        const std::string description =
+            "Image description: Screenshot of a sales dashboard with monthly trend charts.";
+
+        static_cast<void>(client.categorize_file("dashboard.png",
+                                                 source_path + "\n" + description,
+                                                 FileType::File,
+                                                 ""));
+
+        const std::string events = environment.event_log();
+        CHECK(events.find(description) != std::string::npos);
+        CHECK(events.find(source_path) == std::string::npos);
+    }
+}
+
 TEST_CASE("CodexClient generic completion does not attach category output schema")
 {
     FakeRuntimeEnvironment environment("client-generic");

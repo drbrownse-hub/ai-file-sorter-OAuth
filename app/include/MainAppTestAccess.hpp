@@ -71,6 +71,11 @@ public:
      */
     static QPushButton* analyze_button(MainApp& app);
     /**
+     * @brief Start the shared Codex runtime through the lazy-start seam used by analysis.
+     * @param app MainApp instance.
+     */
+    static void start_chatgpt_runtime(MainApp& app);
+    /**
      * @brief Access the Settings -> Clear cache action.
      * @param app MainApp instance.
      * @return Pointer to the action, or nullptr if unavailable.

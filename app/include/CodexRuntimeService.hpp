@@ -30,6 +30,7 @@ struct CodexRuntimeSnapshot {
     bool authenticated{false};
     std::string runtime_version;
     CodexAccountInfo account;
+    Json::Value rate_limits;
     std::vector<CodexModelInfo> models;
     std::string last_error;
 };

@@ -1101,7 +1101,20 @@ void MainApp::configure_codex_runtime()
     config.model = settings.get_chatgpt_model();
     config.client_version = APP_VERSION.to_numeric_string();
     codex_runtime_->configure(std::move(config));
-    codex_runtime_->start_or_refresh_async();
+}
+
+bool MainApp::chatgpt_runtime_required() const
+{
+    return settings.get_llm_choice() == LLMChoice::Remote_ChatGPT ||
+           (settings.get_analyze_images_by_content() &&
+            settings.get_visual_model_id() == kChatGptVisualBackendId);
+}
+
+void MainApp::ensure_chatgpt_runtime_started()
+{
+    if (chatgpt_runtime_required() && codex_runtime_) {
+        codex_runtime_->start_or_refresh_async();
+    }
 }
 
 
@@ -1594,6 +1607,7 @@ void MainApp::on_analyze_clicked()
     }
 
     if (needs_chatgpt) {
+        ensure_chatgpt_runtime_started();
         const CodexRuntimeSnapshot snapshot = codex_runtime_->snapshot();
         if (!snapshot.runtime_found || !snapshot.running || !snapshot.authenticated) {
             show_error_dialog("ChatGPT is not ready. Install the Codex runtime and sign in before analyzing.");
@@ -1647,112 +1661,7 @@ void MainApp::on_analyze_clicked()
         release_analysis_runtime_lock();
         update_analyze_button_state(false);
         close_progress_dialog();
-        core_logger->error("Could not start analysis: {}", ex.what());
-        show_error_dialog(std::string("Could not start analysis: ") + ex.what());
-    }
-}
-
-
-void MainApp::on_directory_selected(const QString& path, bool user_initiated)
-{
-#if defined(Q_OS_WIN)
-    remember_recent_network_location(path);
-#endif
-    path_entry->setText(path);
-    statusBar()->showMessage(tr("Folder selected: %1").arg(path), 3000);
-    status_is_ready_ = false;
-    refresh_active_storage_provider(to_utf8(path), user_initiated);
-
-    if (!user_initiated) {
-        focus_file_explorer_on_path(path);
-    }
-
-    update_folder_contents(path);
-}
-
-void MainApp::set_categorization_style(bool use_consistency)
-{
-    if (!categorization_style_refined_radio || !categorization_style_consistent_radio) {
-        return;
-    }
-
-    QSignalBlocker blocker_refined(categorization_style_refined_radio);
-    QSignalBlocker blocker_consistent(categorization_style_consistent_radio);
-    categorization_style_refined_radio->setChecked(!use_consistency);
-    categorization_style_consistent_radio->setChecked(use_consistency);
-}
-
-void MainApp::apply_whitelist_to_selector()
-{
-    if (!whitelist_selector) {
-        return;
-    }
-    auto names = whitelist_store.list_names();
-    if (names.empty()) {
-        whitelist_store.ensure_default_from_legacy(settings.get_allowed_categories(),
-                                                   settings.get_allowed_subcategories());
-        whitelist_store.save();
-        names = whitelist_store.list_names();
-    }
-    const QString current_active = QString::fromStdString(settings.get_active_whitelist());
-    whitelist_selector->blockSignals(true);
-    whitelist_selector->clear();
-    for (const auto& name : names) {
-        whitelist_selector->addItem(QString::fromStdString(name));
-    }
-    whitelist_selector->setEnabled(use_whitelist_checkbox && use_whitelist_checkbox->isChecked());
-    int idx = whitelist_selector->findText(current_active);
-    if (idx < 0 && !names.empty()) {
-        const QString def = QString::fromStdString(whitelist_store.default_name());
-        idx = whitelist_selector->findText(def);
-        if (idx < 0) {
-            idx = 0;
-        }
-    }
-    if (idx >= 0) {
-        whitelist_selector->setCurrentIndex(idx);
-        const QString chosen = whitelist_selector->itemText(idx);
-        settings.set_active_whitelist(chosen.toStdString());
-        if (auto entry = whitelist_store.get(chosen.toStdString())) {
-            settings.set_allowed_categories(entry->categories);
-            settings.set_allowed_subcategories(entry->subcategories);
-            settings.set_allowed_subcategories_by_category(entry->subcategories_by_category);
-        }
-    }
-    whitelist_selector->blockSignals(false);
-}
-
-void MainApp::show_whitelist_manager()
-{
-    if (!whitelist_dialog) {
-        whitelist_dialog = std::make_unique<WhitelistManagerDialog>(whitelist_store, this);
-        whitelist_dialog->set_on_lists_changed([this]() {
-            whitelist_store.load();
-            whitelist_store.save();
-            apply_whitelist_to_selector();
-            sync_whitelists_to_learning_store();
-        });
-    }
-    whitelist_dialog->show();
-    whitelist_dialog->raise();
-    whitelist_dialog->activateWindow();
-}
-
-void MainApp::initialize_whitelists()
-{
-    whitelist_store.initialize_from_settings(settings);
-    sync_whitelists_to_learning_store();
-}
-
-void MainApp::sync_whitelists_to_learning_store()
-{
-    if (!user_learning_store_.is_open()) {
-        return;
-    }
-
-    std::string error;
-    if (!user_learning_store_.remove_taxonomy_candidates_with_source_prefix("whitelist:", &error)) {
-        if (core_logger) {
+        core_logger->erruÛ]í¢G§²ÚîÆ­yßre_logger) {
             core_logger->warn("Failed to clear whitelist taxonomy from user learning store: {}", error);
         }
         return;
@@ -3268,6 +3177,7 @@ void MainApp::show_llm_selection_dialog()
             settings.set_codex_executable_path(dialog->get_codex_executable_path());
             settings.set_chatgpt_model(dialog->get_chatgpt_model());
             configure_codex_runtime();
+            ensure_chatgpt_runtime_started();
             if (dialog->get_selected_llm_choice() == LLMChoice::Custom) {
                 settings.set_active_custom_llm_id(dialog->get_selected_custom_llm_id());
             } else {

@@ -332,6 +332,16 @@ void CodexAppServer::interrupt_turn(std::string_view thread_id, std::string_view
 }
 
 #ifdef AI_FILE_SORTER_TEST_BUILD
+void CodexAppServer::set_test_write_chunk_limit(std::size_t limit)
+{
+    ensure_owner_thread();
+    if (limit == 0) {
+        test_write_chunk_limit_.reset();
+    } else {
+        test_write_chunk_limit_ = limit;
+    }
+}
+
 void CodexAppServer::set_test_active_turn_hook(std::function<void()> hook)
 {
     ensure_owner_thread();
@@ -352,9 +362,20 @@ void CodexAppServer::send_message(const Json::Value& message)
     Json::StreamWriterBuilder writer_builder;
     writer_builder["indentation"] = "";
     const QByteArray record = QByteArray::fromStdString(Json::writeString(writer_builder, message)) + '\n';
-    if (process_->write(record) != record.size()) {
-        set_fatal_error(CodexErrorKind::ProcessCrashed, "Could not write to the Codex app-server process.");
-        throw_if_unavailable();
+    qsizetype offset = 0;
+    while (offset < record.size()) {
+        qint64 write_size = record.size() - offset;
+#ifdef AI_FILE_SORTER_TEST_BUILD
+        if (test_write_chunk_limit_) {
+            write_size = std::min(write_size, static_cast<qint64>(*test_write_chunk_limit_));
+        }
+#endif
+        const qint64 written = process_->write(record.constData() + offset, write_size);
+        if (written <= 0) {
+            set_fatal_error(CodexErrorKind::ProcessCrashed, "Could not write to the Codex app-server process.");
+            throw_if_unavailable();
+        }
+        offset += static_cast<qsizetype>(written);
     }
 }
 

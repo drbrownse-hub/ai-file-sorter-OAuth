@@ -252,6 +252,47 @@ TEST_CASE("Codex runtime owns one process and serves worker-thread inference")
                      inference_cwd.string()) != std::string::npos);
 }
 
+TEST_CASE("Codex runtime refreshes rate limits from reads and update notifications")
+{
+    FakeRuntimeEnvironment environment("rate-limits");
+    QTemporaryDir temp;
+    REQUIRE(temp.isValid());
+    CodexRuntimeService service;
+    service.configure(runtime_config(temp.path().toStdString()));
+    service.start_or_refresh_async();
+
+    REQUIRE(wait_until([&] {
+        const auto snapshot = service.snapshot();
+        return snapshot.authenticated && snapshot.rate_limits["primary"]["usedPercent"].asInt() == 25;
+    }));
+    CHECK(contains_event(environment, "request account/rateLimits/read"));
+
+    REQUIRE(wait_until([&] {
+        return service.snapshot().rate_limits["primary"]["usedPercent"].asInt() == 40;
+    }));
+    CHECK(service.snapshot().rate_limits["primary"]["resetsAt"].asInt64() == 1779459494);
+}
+
+TEST_CASE("Codex runtime tolerates unsupported rate-limit reads from older runtimes")
+{
+    FakeRuntimeEnvironment environment("legacy-rate-limits");
+    QTemporaryDir temp;
+    REQUIRE(temp.isValid());
+    CodexRuntimeService service;
+    service.configure(runtime_config(temp.path().toStdString()));
+    service.start_or_refresh_async();
+
+    REQUIRE(wait_until([&] {
+        const auto snapshot = service.snapshot();
+        return snapshot.running && snapshot.authenticated && snapshot.models.size() == 2;
+    }));
+    CHECK(contains_event(environment, "request account/rateLimits/read"));
+    CHECK(service.snapshot().rate_limits.isNull());
+    CHECK(service.snapshot().last_error.empty());
+
+    REQUIRE_NOTHROW(service.run_turn(turn_request()));
+}
+
 TEST_CASE("Codex runtime serializes concurrent text and image turns")
 {
     FakeRuntimeEnvironment environment("serialize-turns");

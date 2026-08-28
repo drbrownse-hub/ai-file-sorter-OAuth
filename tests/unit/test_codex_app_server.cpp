@@ -196,6 +196,24 @@ TEST_CASE("CodexAppServer preserves pending turn notifications before turn respo
     CHECK(result.completion.usage.output_tokens == 5);
 }
 
+TEST_CASE("CodexAppServer handles short writes for large inline image requests")
+{
+    FakeScenario scenario("vision-turn");
+    CodexAppServer server;
+    server.start(fake_launch_config());
+    server.set_test_write_chunk_limit(7);
+
+    const std::vector<CodexUserInput> inputs = {
+        {CodexUserInput::Kind::ImageDataUrl, "data:image/png;base64," + std::string(128 * 1024, 'A')},
+    };
+    const Json::Value params = CodexProtocol::make_turn_start_params("fake-thread", inputs, Json::Value());
+
+    const Json::Value response = server.request("turn/start", params, std::chrono::milliseconds(500));
+
+    REQUIRE(response["turn"]["id"].isString());
+    CHECK(response["turn"]["id"].asString() == "fake-turn-0");
+}
+
 TEST_CASE("CodexAppServer reserves handshake methods after initialization")
 {
     FakeScenario scenario("authenticated");

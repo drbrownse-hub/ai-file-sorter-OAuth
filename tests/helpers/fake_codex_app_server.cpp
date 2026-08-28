@@ -33,13 +33,15 @@ bool is_runtime_scenario(const std::string& scenario)
 {
     return scenario == "runtime-authenticated" || scenario == "serialize-turns" ||
            scenario == "crash-once" || scenario == "crash-always" || scenario == "delayed-turn" ||
+           scenario == "slow-turn" || scenario == "runtime-rate-limited" ||
            scenario == "auth-loss" || scenario == "auth-loss-delayed-turn" ||
            scenario == "failed-turn" || scenario == "login-flows" || scenario == "login-failure" ||
            scenario == "image-analyzer" || scenario == "image-analyzer-malformed-missing" ||
            scenario == "image-analyzer-malformed-nonstring" || scenario == "image-analyzer-malformed-extra" ||
            scenario == "client-category" || scenario == "client-generic" ||
            scenario == "client-rate-limited" || scenario == "client-invalid-missing" ||
-           scenario == "client-invalid-nonstring" || scenario == "client-invalid-extra";
+           scenario == "client-invalid-nonstring" || scenario == "client-invalid-extra" ||
+           scenario == "rate-limits" || scenario == "legacy-rate-limits";
 }
 
 class FakeCodexAppServer final : public QObject {
@@ -132,6 +134,33 @@ public:
             }
             return;
         }
+        if (method == "account/rateLimits/read" && is_runtime_scenario(scenario_)) {
+            if (scenario_ == "legacy-rate-limits") {
+                write_error(request["id"], -32601, "Method not found: account/rateLimits/read");
+                return;
+            }
+            Json::Value result(Json::objectValue);
+            result["rateLimits"]["limitId"] = "codex";
+            result["rateLimits"]["primary"]["usedPercent"] = 25;
+            result["rateLimits"]["primary"]["windowDurationMins"] = 300;
+            result["rateLimits"]["primary"]["resetsAt"] = Json::Int64(1779459394);
+            result["rateLimits"]["planType"] = "plus";
+            result["rateLimitsByLimitId"]["codex"] = result["rateLimits"];
+            write_result(request["id"], result);
+            if (scenario_ == "rate-limits" && !rate_limits_update_scheduled_) {
+                rate_limits_update_scheduled_ = true;
+                QTimer::singleShot(50, this, [this] {
+                    Json::Value params(Json::objectValue);
+                    params["rateLimits"]["limitId"] = "codex";
+                    params["rateLimits"]["primary"]["usedPercent"] = 40;
+                    params["rateLimits"]["primary"]["windowDurationMins"] = 300;
+                    params["rateLimits"]["primary"]["resetsAt"] = Json::Int64(1779459494);
+                    params["rateLimits"]["planType"] = "plus";
+                    write_notification("account/rateLimits/updated", params);
+                });
+            }
+            return;
+        }
         if (method == "model/list" && is_runtime_scenario(scenario_)) {
             Json::Value result(Json::objectValue);
             Json::Value text_model(Json::objectValue);
@@ -165,7 +194,7 @@ public:
             write_result(outer_id_, outer);
             return;
         }
-        if (scenario_ == "rate-limited") {
+        if (scenario_ == "rate-limited" || scenario_ == "runtime-rate-limited") {
             write_error(request["id"], -32001, "Server overloaded; retry later.");
             return;
         }
@@ -218,6 +247,7 @@ public:
             Json::Value result(Json::objectValue);
             result["turn"]["id"] = turn_id;
             write_result(request["id"], result);
+            append_event("turn-ready " + turn_id);
 
             if (scenario_ == "crash-after-turn-start") {
                 std::cerr << "fake child crashed after turn start" << std::flush;
@@ -412,6 +442,7 @@ private:
     int turn_sequence_{0};
     bool authenticated_{false};
     bool auth_loss_scheduled_{false};
+    bool rate_limits_update_scheduled_{false};
 };
 
 } // namespace

@@ -57,6 +57,7 @@ public:
     void interrupt_turn(std::string_view thread_id, std::string_view turn_id);
 
 #ifdef AI_FILE_SORTER_TEST_BUILD
+    void set_test_write_chunk_limit(std::size_t limit);
     void set_test_active_turn_hook(std::function<void()> hook);
 #endif
 
@@ -113,6 +114,7 @@ private:
     bool initialized_{false};
 
 #ifdef AI_FILE_SORTER_TEST_BUILD
+    std::optional<std::size_t> test_write_chunk_limit_;
     std::function<void()> test_active_turn_hook_;
 #endif
 
