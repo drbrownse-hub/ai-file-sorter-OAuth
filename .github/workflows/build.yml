@@ -1,6 +1,7 @@
 name: Build
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [ main, dev ]
 
@@ -74,4 +75,12 @@ jobs:
             -VcpkgRoot $vcpkgRoot `
             -BuildTests `
             -RunTests `
+            -Variants Standard `
             -Parallel 4
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-file-sorter-windows-x64
+          path: app/build-windows/Release/
+          if-no-files-found: error
